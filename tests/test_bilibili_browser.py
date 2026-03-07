@@ -110,9 +110,11 @@ async def test_navigate_uses_official_open_command(monkeypatch: pytest.MonkeyPat
 
     await browser.navigate("https://www.bilibili.com")
 
-    assert calls == [
-        ("agent-browser", "open", "https://www.bilibili.com", "--headed")
-    ]
+    assert len(calls) == 1
+    assert calls[0][0] == "agent-browser"
+    assert calls[0][1] == "--session"
+    assert calls[0][2]
+    assert calls[0][3:] == ("open", "https://www.bilibili.com", "--headed")
 
 
 @pytest.mark.asyncio
@@ -143,10 +145,46 @@ async def test_get_page_content_uses_open_then_snapshot(monkeypatch: pytest.Monk
     content = await browser.get_page_content("https://example.com")
 
     assert content == '- heading "Example Domain" [ref=e1]'
-    assert calls == [
-        ("agent-browser", "open", "https://example.com"),
-        ("agent-browser", "snapshot", "-i", "--json"),
+    assert len(calls) == 2
+    assert calls[0][0] == "agent-browser"
+    assert calls[0][1] == "--session"
+    assert calls[1][0] == "agent-browser"
+    assert calls[1][1] == "--session"
+    assert calls[0][2] == calls[1][2]
+    assert calls[0][3:] == ("open", "https://example.com")
+    assert calls[1][3:] == ("snapshot", "-i", "--json")
+
+
+@pytest.mark.asyncio
+async def test_navigate_retries_once_on_err_aborted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    responses = [
+        _FakeProcess(
+            returncode=1,
+            stderr='page.goto: net::ERR_ABORTED at https://www.bilibili.com/',
+        ),
+        _FakeProcess(stdout='{"success": true}'),
     ]
+
+    async def fake_exec(*cmd: str, **kwargs: object) -> _FakeProcess:
+        calls.append(tuple(cmd))
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "openbiliclaw.bilibili.browser.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+
+    browser = BilibiliBrowser(executable="agent-browser")
+
+    await browser.navigate("https://www.bilibili.com")
+
+    assert len(calls) == 2
+    assert calls[0][2] == calls[1][2]
+    assert calls[0][3:] == ("open", "https://www.bilibili.com")
+    assert calls[1][3:] == ("open", "https://www.bilibili.com")
 
 
 @pytest.mark.asyncio

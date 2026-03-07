@@ -12,6 +12,7 @@ import json
 import logging
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -44,6 +45,7 @@ class BilibiliBrowser:
         self._executable = executable or self._find_executable()
         self._headed = headed
         self._cookie = cookie
+        self._session_name = f"openbiliclaw-{uuid.uuid4().hex[:8]}"
 
     @staticmethod
     def _find_executable() -> str:
@@ -104,7 +106,7 @@ class BilibiliBrowser:
         Returns:
             Parsed JSON output from agent-browser.
         """
-        cmd = [self._executable, *args]
+        cmd = [self._executable, "--session", self._session_name, *args]
         if self._headed:
             cmd.append("--headed")
 
@@ -137,6 +139,11 @@ class BilibiliBrowser:
         Returns:
             Page info.
         """
+        try:
+            return await self._run_command("open", url)
+        except BrowserCommandError as exc:
+            if "ERR_ABORTED" not in str(exc):
+                raise
         return await self._run_command("open", url)
 
     async def get_page_content(self, url: str) -> str:
