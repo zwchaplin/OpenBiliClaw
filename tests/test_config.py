@@ -106,6 +106,23 @@ class TestConfigDefaults:
         config = load_config("/nonexistent/path/config.toml")
         assert config.language == "zh"
 
+    def test_build_logging_config(self) -> None:
+        raw = {
+            "logging": {
+                "level": "WARNING",
+                "file_level": "DEBUG",
+                "directory": "runtime_logs",
+                "filename": "app.log",
+            }
+        }
+
+        config = _build_config(raw)
+
+        assert config.logging.level == "WARNING"
+        assert config.logging.file_level == "DEBUG"
+        assert config.logging.directory == "runtime_logs"
+        assert config.logging.filename == "app.log"
+
 
 def test_load_config_with_diagnostics_creates_config_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

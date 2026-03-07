@@ -91,6 +91,29 @@ class StorageConfig:
 
 
 @dataclass
+class LoggingConfig:
+    """Logging configuration."""
+
+    level: str = "INFO"
+    file_level: str = "DEBUG"
+    directory: str = "logs"
+    filename: str = "openbiliclaw.log"
+
+    @property
+    def directory_path(self) -> Path:
+        """Resolved log directory path."""
+        path = Path(self.directory)
+        if not path.is_absolute():
+            path = _PROJECT_ROOT / path
+        return path
+
+    @property
+    def file_path(self) -> Path:
+        """Resolved full log file path."""
+        return self.directory_path / self.filename
+
+
+@dataclass
 class Config:
     """Root configuration for OpenBiliClaw."""
 
@@ -100,6 +123,7 @@ class Config:
     bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @property
     def data_path(self) -> Path:
@@ -178,6 +202,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     bili_raw = raw.get("bilibili", {})
     sched_raw = raw.get("scheduler", {})
     store_raw = raw.get("storage", {})
+    logging_raw = raw.get("logging", {})
 
     llm = LLMConfig(
         default_provider=llm_raw.get("default_provider", "openai"),
@@ -202,6 +227,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
         bilibili=bilibili,
         scheduler=SchedulerConfig(**sched_raw),
         storage=StorageConfig(**store_raw),
+        logging=LoggingConfig(**logging_raw),
     )
 
 
@@ -253,6 +279,8 @@ def _collect_config_issues(config: Config) -> list[ConfigIssue]:
 
 def load_config_with_diagnostics(
     config_path: str | Path | None = None,
+    *,
+    ensure_default_file: bool = True,
 ) -> tuple[Config, ConfigDiagnostics]:
     """Load configuration from TOML file(s).
 
@@ -280,7 +308,10 @@ def load_config_with_diagnostics(
         else:
             diagnostics.messages.append(f"未找到配置文件：{path}，当前使用默认配置。")
     else:
-        _ensure_default_config_file(diagnostics)
+        if ensure_default_file:
+            _ensure_default_config_file(diagnostics)
+        else:
+            diagnostics.config_path = _default_config_path()
         for filename in _CONFIG_FILENAMES:
             path = _PROJECT_ROOT / filename
             if path.exists():
@@ -296,7 +327,7 @@ def load_config_with_diagnostics(
 
 def load_config(config_path: str | Path | None = None) -> Config:
     """Load configuration only, without diagnostics."""
-    config, _ = load_config_with_diagnostics(config_path)
+    config, _ = load_config_with_diagnostics(config_path, ensure_default_file=False)
     return config
 
 
