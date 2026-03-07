@@ -59,3 +59,13 @@ discovery_cron = "0 */4 * * *"  # Every 4 hours
 [storage]
 # SQLite database path
 db_path = "data/openbiliclaw.db"
+
+[logging]
+# Console log level: DEBUG | INFO | WARNING | ERROR
+level = "INFO"
+# File log level, usually more verbose than console
+file_level = "DEBUG"
+# Log directory (relative to project root by default)
+directory = "logs"
+# Log file name inside the directory above
+filename = "openbiliclaw.log"

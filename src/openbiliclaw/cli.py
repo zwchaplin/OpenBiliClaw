@@ -5,6 +5,8 @@ Provides the command-line entry point using Typer.
 
 from __future__ import annotations
 
+from typing import Any
+
 import typer
 from rich.console import Console
 
@@ -14,6 +16,23 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+_APP_CONTEXT: dict[str, Any] = {}
+
+
+def _initialize_logging(log_level_override: str | None = None) -> None:
+    """Load config and initialize the logging system."""
+    from openbiliclaw.config import load_config
+    from openbiliclaw.logging_setup import configure_logging
+
+    config = load_config()
+    configure_logging(config, console_level_override=log_level_override)
+
+
+@app.callback()
+def main(log_level: str | None = typer.Option(None, "--log-level")) -> None:
+    """Global CLI options."""
+    _APP_CONTEXT["log_level"] = log_level
+    _initialize_logging(log_level_override=log_level)
 
 
 def _print_config_guidance(messages: list[str]) -> None:
