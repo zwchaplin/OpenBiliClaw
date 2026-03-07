@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from openbiliclaw import cli as cli_module
 from openbiliclaw import config as config_module
 from openbiliclaw.bilibili.auth import AuthStatus
+from openbiliclaw.bilibili.browser import BrowserCommandError
 from openbiliclaw.cli import app
 
 
@@ -243,3 +244,72 @@ def test_auth_status_reports_authenticated_user(
     assert "已认证" in result.stdout
     assert "alice" in result.stdout
     assert "10086" in result.stdout
+
+
+def test_browser_status_reports_install_guidance_when_missing(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    class FakeBrowser:
+        executable = "agent-browser"
+        is_available = False
+
+        @staticmethod
+        def get_install_hint() -> str:
+            return "npm install -g agent-browser"
+
+    monkeypatch.setattr(cli_module, "_build_browser", lambda: FakeBrowser(), raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["browser", "status"])
+
+    assert result.exit_code == 1
+    assert "未安装" in result.stdout
+    assert "npm install -g agent-browser" in result.stdout
+
+
+def test_browser_open_reports_navigation_success(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    class FakeBrowser:
+        executable = "/tmp/agent-browser"
+        is_available = True
+
+        @staticmethod
+        def get_install_hint() -> str:
+            return ""
+
+        async def navigate(self, url: str) -> dict[str, object]:
+            return {"success": True, "url": url}
+
+    monkeypatch.setattr(cli_module, "_build_browser", lambda: FakeBrowser(), raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["browser", "open", "https://example.com"])
+
+    assert result.exit_code == 0
+    assert "浏览器已打开" in result.stdout
+    assert "https://example.com" in result.stdout
+
+
+def test_browser_content_reports_command_failure(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    class FakeBrowser:
+        executable = "/tmp/agent-browser"
+        is_available = True
+
+        @staticmethod
+        def get_install_hint() -> str:
+            return ""
+
+        async def get_page_content(self, url: str) -> str:
+            raise BrowserCommandError("snapshot failed")
+
+    monkeypatch.setattr(cli_module, "_build_browser", lambda: FakeBrowser(), raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["browser", "content", "https://example.com"])
+
+    assert result.exit_code == 1
+    assert "浏览器操作失败" in result.stdout
+    assert "snapshot failed" in result.stdout

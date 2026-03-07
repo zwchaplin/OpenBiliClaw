@@ -17,7 +17,9 @@ app = typer.Typer(
     add_completion=False,
 )
 auth_app = typer.Typer(help="B 站认证命令")
+browser_app = typer.Typer(help="agent-browser 浏览器命令")
 app.add_typer(auth_app, name="auth")
+app.add_typer(browser_app, name="browser")
 console = Console()
 _APP_CONTEXT: dict[str, Any] = {}
 
@@ -45,6 +47,19 @@ def _build_auth_manager() -> Any:
     from openbiliclaw.config import load_config
 
     return AuthManager(load_config().data_path)
+
+
+def _build_browser() -> Any:
+    """Build the configured Bilibili browser integration."""
+    from openbiliclaw.bilibili.browser import BilibiliBrowser
+    from openbiliclaw.config import load_config
+
+    config = load_config()
+    return BilibiliBrowser(
+        executable=config.bilibili.browser_executable,
+        headed=config.bilibili.browser_headed,
+        cookie=config.bilibili.cookie,
+    )
 
 
 @app.callback()
@@ -75,6 +90,14 @@ def _print_auth_status(status: Any) -> None:
         console.print(f"  UID: {status.user_id}")
     if status.message:
         console.print(f"  说明: {status.message}")
+
+
+def _print_browser_status(browser: Any) -> None:
+    """Render browser installation status."""
+    availability = "已安装" if browser.is_available else "未安装"
+    console.print("[bold]agent-browser 状态[/bold]")
+    console.print(f"  状态: {availability}")
+    console.print(f"  可执行文件: {browser.executable}")
 
 
 def _require_runtime_config() -> None:
@@ -219,6 +242,61 @@ def health_check() -> None:
         console.print(f"  {name}{default_label}: {status}")
         if result.error:
             console.print(f"    原因: {result.error}")
+
+
+@browser_app.command("status")
+def browser_status() -> None:
+    """检查 agent-browser 是否可用."""
+    browser = _build_browser()
+    _print_browser_status(browser)
+    if browser.is_available:
+        return
+    console.print(f"  安装提示: {browser.get_install_hint()}")
+    raise typer.Exit(code=1)
+
+
+@browser_app.command("open")
+def browser_open(url: str) -> None:
+    """通过 agent-browser 打开一个页面."""
+    from openbiliclaw.bilibili.browser import BrowserCommandError
+
+    browser = _build_browser()
+    if not browser.is_available:
+        console.print("[bold red]agent-browser 未安装[/bold red]")
+        console.print(f"  {browser.get_install_hint()}")
+        raise typer.Exit(code=1)
+
+    try:
+        asyncio.run(browser.navigate(url))
+    except BrowserCommandError as exc:
+        console.print("[bold red]浏览器操作失败[/bold red]")
+        console.print(f"  {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print("[bold green]浏览器已打开[/bold green]")
+    console.print(f"  {url}")
+
+
+@browser_app.command("content")
+def browser_content(url: str) -> None:
+    """抓取当前页面可见文本."""
+    from openbiliclaw.bilibili.browser import BrowserCommandError
+
+    browser = _build_browser()
+    if not browser.is_available:
+        console.print("[bold red]agent-browser 未安装[/bold red]")
+        console.print(f"  {browser.get_install_hint()}")
+        raise typer.Exit(code=1)
+
+    try:
+        content = asyncio.run(browser.get_page_content(url))
+    except BrowserCommandError as exc:
+        console.print("[bold red]浏览器操作失败[/bold red]")
+        console.print(f"  {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print("[bold]页面内容[/bold]")
+    console.print(content)
 
 
 if __name__ == "__main__":
