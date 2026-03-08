@@ -197,3 +197,30 @@ async def test_record_feedback_updates_recommendation_feedback_fields() -> None:
         assert row["feedback_type"] == "like"
         assert row["feedback_note"] == "这个讲法很对胃口"
         assert row["feedback_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_record_feedback_accepts_comment_feedback_type() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        recommendation_id = db.insert_recommendation(
+            "BV1REC",
+            confidence=0.83,
+            presented=1,
+        )
+
+        await engine.record_feedback(
+            recommendation_id,
+            feedback_type="comment",
+            note="方向对，但讲得不够深。",
+        )
+
+        row = db.get_recommendation_by_id(recommendation_id)
+
+        assert row is not None
+        assert row["feedback_type"] == "comment"
+        assert row["feedback_note"] == "方向对，但讲得不够深。"
+        assert row["feedback_at"] is not None

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from openbiliclaw.api.models import (
     BehaviorEventBatchIn,
     EventIngestResponse,
+    FeedbackIn,
+    FeedbackResponse,
     HealthResponse,
     RecommendationListResponse,
     RecommendationOut,
@@ -81,6 +83,42 @@ def create_app(
                 )
                 for row in rows
             ]
+        )
+
+    @app.post("/api/feedback", response_model=FeedbackResponse)
+    async def feedback(payload: FeedbackIn) -> FeedbackResponse:
+        feedback_type = payload.feedback_type.strip().lower()
+        note = payload.note.strip()
+        if feedback_type not in {"like", "dislike", "comment"}:
+            raise HTTPException(status_code=422, detail="Unsupported feedback type.")
+        if feedback_type == "comment" and not note:
+            raise HTTPException(status_code=422, detail="Comment feedback requires note.")
+
+        recommendation = database.get_recommendation_by_id(payload.recommendation_id)
+        if recommendation is None:
+            raise HTTPException(status_code=404, detail="Recommendation not found.")
+
+        database.update_recommendation_feedback(
+            payload.recommendation_id,
+            feedback_type=feedback_type,
+            feedback_note=note,
+        )
+        await memory_manager.propagate_event(
+            {
+                "event_type": "feedback",
+                "title": str(recommendation.get("title", "")),
+                "metadata": {
+                    "recommendation_id": payload.recommendation_id,
+                    "bvid": recommendation.get("bvid", ""),
+                    "feedback_type": feedback_type,
+                    "feedback_note": note,
+                },
+            }
+        )
+        return FeedbackResponse(
+            ok=True,
+            recommendation_id=payload.recommendation_id,
+            feedback_type=feedback_type,
         )
 
     return app

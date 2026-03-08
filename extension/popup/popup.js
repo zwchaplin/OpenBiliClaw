@@ -1,4 +1,9 @@
-import { buildVideoUrl, getPopupState } from "./popup-helpers.js";
+import {
+  buildFeedbackPayload,
+  buildVideoUrl,
+  getPopupState,
+  validateCommentInput,
+} from "./popup-helpers.js";
 
 const BACKEND_URL = "http://127.0.0.1:8420/api";
 
@@ -42,6 +47,20 @@ async function fetchRecommendations() {
   return Array.isArray(payload.items) ? payload.items : [];
 }
 
+async function submitFeedback(payload) {
+  const response = await fetch(`${BACKEND_URL}/feedback`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`feedback request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 function showEmptyState(title, message) {
   if (!elements.emptyState || !elements.emptyTitle || !elements.emptyText) return;
   elements.emptyState.hidden = false;
@@ -72,6 +91,37 @@ function createActionButton(label, className, onClick) {
     onClick();
   });
   return button;
+}
+
+function createCommentComposer(item) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "comment-composer";
+  wrapper.hidden = true;
+
+  const input = document.createElement("textarea");
+  input.className = "comment-input";
+  input.rows = 3;
+  input.placeholder = "写一句你对这条推荐的真实感觉";
+
+  const submit = createActionButton("发送", "action-button action-primary", async () => {
+    const validation = validateCommentInput(input.value);
+    if (!validation.valid) {
+      setHint(validation.message);
+      input.focus();
+      return;
+    }
+    try {
+      await submitFeedback(buildFeedbackPayload(item.id, "comment", input.value));
+      setHint("已记录你的反馈。");
+      wrapper.hidden = true;
+      input.value = "";
+    } catch {
+      setHint("反馈失败，请确认本地后端已启动。");
+    }
+  });
+
+  wrapper.append(input, submit);
+  return { wrapper, input };
 }
 
 function renderRecommendations(items) {
@@ -116,19 +166,36 @@ function renderRecommendations(items) {
 
     const actions = document.createElement("div");
     actions.className = "recommendation-actions";
+    const composer = createCommentComposer(item);
     actions.append(
       createActionButton("打开视频", "action-button action-primary", () => {
         void openRecommendation(item.bvid);
       }),
-      createActionButton("喜欢", "action-button action-secondary", () => {
-        setHint("插件反馈按钮即将支持。");
+      createActionButton("喜欢", "action-button action-secondary", async () => {
+        try {
+          await submitFeedback(buildFeedbackPayload(item.id, "like"));
+          setHint("已记录你的反馈。");
+        } catch {
+          setHint("反馈失败，请确认本地后端已启动。");
+        }
       }),
-      createActionButton("不喜欢", "action-button action-secondary", () => {
-        setHint("插件反馈按钮即将支持。");
+      createActionButton("不喜欢", "action-button action-secondary", async () => {
+        try {
+          await submitFeedback(buildFeedbackPayload(item.id, "dislike"));
+          setHint("已记录你的反馈。");
+        } catch {
+          setHint("反馈失败，请确认本地后端已启动。");
+        }
+      }),
+      createActionButton("写一句", "action-button action-secondary", () => {
+        composer.wrapper.hidden = !composer.wrapper.hidden;
+        if (!composer.wrapper.hidden) {
+          composer.input.focus();
+        }
       }),
     );
 
-    card.append(actions);
+    card.append(actions, composer.wrapper);
     elements.list.append(card);
   }
 }

@@ -14,7 +14,7 @@
 |------|------|------|
 | 8.1 行为采集 | ✅ | `collector.ts` + `service-worker.ts` 已接通真实事件链 |
 | 8.2 后端 API | ✅ | Python 侧 `/api/events`、`/api/health`、`/api/recommendations` 已可联调 |
-| 8.3 Popup | 🔄 | 已显示连接状态与推荐列表，反馈按钮后端仍待接通 |
+| 8.3 Popup | ✅ | 已显示连接状态、推荐列表，并支持 popup 内直接反馈 |
 
 ## 目录结构
 
@@ -76,10 +76,8 @@ popup 当前已具备：
 - 从 `/api/recommendations` 拉取推荐列表
 - 展示标题、UP 主、`topic_label`、朋友式推荐文案
 - 点击卡片或“打开视频”按钮后，直接跳转到对应 B 站视频页
-
-当前仍保留的未完成项：
-
-- `喜欢 / 不喜欢` 反馈按钮还只是 UI 占位，真实反馈写回将在后续任务接通
+- `喜欢` / `不喜欢` 按钮会调用 `/api/feedback`
+- `写一句` 支持 inline comment 输入并提交 `comment` 反馈
 
 ### 构建链路
 
@@ -131,9 +129,10 @@ npm run build
 - `/api/events` 能接收插件预检请求与事件批次
 - SQLite `events` 表已能写入 `snapshot` 事件
 - popup 能根据 `/api/health` 与 `/api/recommendations` 切换在线、空状态与推荐列表展示
+- popup 反馈按钮已能经 `/api/feedback` 写回推荐表和事件层
 
 ## 当前限制
 
 - 行为按钮识别基于 DOM 文本、类名和 `aria-label`，不是服务端最终结果确认
 - 采集范围优先覆盖首页、搜索页和视频页，未承诺所有 B 站模板完全一致
-- popup 已可展示推荐列表，但反馈按钮尚未接通真实后端
+- popup comment 采用轻量 inline 输入，不支持复杂反馈历史浏览

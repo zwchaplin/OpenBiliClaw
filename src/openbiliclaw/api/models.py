@@ -51,3 +51,19 @@ class EventIngestResponse(BaseModel):
     """Response after accepting a batch of events."""
 
     accepted: int
+
+
+class FeedbackIn(BaseModel):
+    """Feedback payload submitted from CLI-compatible clients."""
+
+    recommendation_id: int
+    feedback_type: str
+    note: str = ""
+
+
+class FeedbackResponse(BaseModel):
+    """Response after accepting recommendation feedback."""
+
+    ok: bool
+    recommendation_id: int
+    feedback_type: str

@@ -19,6 +19,7 @@
 | 6.1 推荐排序 | ✅ | 从 `content_cache` 选未推荐内容、按分数排序、写入推荐历史 |
 | 6.2 朋友式推荐表达 | ✅ | 用 LLM 生成朋友式推荐理由和个性化 topic，并在 CLI 中真实展示 |
 | 6.3 推荐持久化 | ✅ | 推荐记录已补齐展示状态、结构化反馈字段和反馈更新时间 |
+| 9.1 反馈处理 | ✅ | CLI、本地 API 与插件 popup 已统一写回推荐反馈与 `feedback` 事件 |
 
 ## 公开 API
 
@@ -78,6 +79,20 @@ Recommendation(
 
 推荐反馈会同时写入事件层，供后续偏好和洞察分析消费。
 
+### Unified Feedback Entry
+
+当前支持三种反馈信号：
+
+- `like`
+- `dislike`
+- `comment`
+
+统一入口包括：
+
+- CLI：`openbiliclaw feedback <id> <like|dislike|comment> [--note ...]`
+- API：`POST /api/feedback`
+- 插件 popup：卡片上的 `喜欢` / `不喜欢` / `写一句`
+
 ## 设计决策
 
 1. **先做排序闭环，再做表达生成**：先确保“选谁”稳定，再讨论“怎么说”
@@ -85,3 +100,4 @@ Recommendation(
 3. **表达生成单独落库**：排序和表达拆开，便于失败时降级到 fallback 文案
 4. **`presented` 在 CLI 展示后更新**：区分“系统选中”和“用户已经看见”
 5. **反馈保留当前状态**：v0.1 只保存当前反馈结果，不额外引入 feedback 历史表
+6. **三端走同一反馈语义**：CLI、API 和 popup 都只写入当前反馈状态，并同步追加 `feedback` 事件

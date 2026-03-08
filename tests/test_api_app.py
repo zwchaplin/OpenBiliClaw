@@ -102,3 +102,98 @@ class TestBackendAPI:
         assert len(data["items"]) == 1
         assert data["items"][0]["id"] == 7
         assert data["items"][0]["title"] == "讲透城市与建筑"
+
+    def test_feedback_endpoint_updates_recommendation_and_records_event(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            async def propagate_event(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+        class FakeDatabase:
+            def __init__(self) -> None:
+                self.updated: list[tuple[int, str, str]] = []
+
+            def get_recommendation_by_id(self, recommendation_id: int) -> dict[str, object] | None:
+                if recommendation_id != 7:
+                    return None
+                return {"id": 7, "bvid": "BV1REC", "title": "讲透城市与建筑"}
+
+            def update_recommendation_feedback(
+                self,
+                recommendation_id: int,
+                *,
+                feedback_type: str,
+                feedback_note: str = "",
+            ) -> None:
+                self.updated.append((recommendation_id, feedback_type, feedback_note))
+
+        memory = FakeMemoryManager()
+        database = FakeDatabase()
+        app = create_app(memory_manager=memory, database=database)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/feedback",
+            json={
+                "recommendation_id": 7,
+                "feedback_type": "like",
+                "note": "这条确实对胃口",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "ok": True,
+            "recommendation_id": 7,
+            "feedback_type": "like",
+        }
+        assert database.updated == [(7, "like", "这条确实对胃口")]
+        assert memory.events[0]["event_type"] == "feedback"
+        assert memory.events[0]["metadata"]["recommendation_id"] == 7
+        assert memory.events[0]["metadata"]["feedback_type"] == "like"
+
+    def test_feedback_endpoint_rejects_comment_without_note(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeDatabase:
+            def get_recommendation_by_id(self, recommendation_id: int) -> dict[str, object] | None:
+                return {"id": recommendation_id, "bvid": "BV1REC", "title": "讲透城市与建筑"}
+
+        app = create_app(memory_manager=object(), database=FakeDatabase())
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/feedback",
+            json={
+                "recommendation_id": 7,
+                "feedback_type": "comment",
+                "note": "",
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_feedback_endpoint_reports_missing_recommendation(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeDatabase:
+            def get_recommendation_by_id(self, recommendation_id: int) -> dict[str, object] | None:
+                return None
+
+        app = create_app(memory_manager=object(), database=FakeDatabase())
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/feedback",
+            json={
+                "recommendation_id": 7,
+                "feedback_type": "dislike",
+                "note": "太浅了",
+            },
+        )
+
+        assert response.status_code == 404

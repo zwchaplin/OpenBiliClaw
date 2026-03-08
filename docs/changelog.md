@@ -6,6 +6,13 @@
 
 ## M8: 插件后端 API（进行中）
 
+### 9.1 反馈处理 — `feedback/m91-processing`
+
+- CLI `feedback` 命令扩展为支持 `like / dislike / comment`，其中 `comment` 必须带 `--note`
+- 新增 `POST /api/feedback`，统一校验推荐存在性、更新反馈字段并追加 `feedback` 事件
+- popup 的 `喜欢 / 不喜欢 / 写一句` 已接通真实后端，提交后会立即写回推荐记录
+- `9.1` 的反馈写入链路现已在 CLI、API、popup 三端统一
+
 ### 8.3 Popup — `extension/m83-popup`
 
 - popup 从占位页升级为真实面板：显示后端连接状态和最新推荐列表

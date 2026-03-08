@@ -22,6 +22,27 @@ export function normalizeRecommendation(item) {
   };
 }
 
+export function buildFeedbackPayload(recommendationId, feedbackType, note = "") {
+  return {
+    recommendation_id: Number(recommendationId),
+    feedback_type: normalizeText(feedbackType),
+    note: normalizeText(note),
+  };
+}
+
+export function validateCommentInput(note) {
+  if (!normalizeText(note)) {
+    return {
+      valid: false,
+      message: "请先写一句你的想法。",
+    };
+  }
+  return {
+    valid: true,
+    message: "",
+  };
+}
+
 export function getPopupState({ online, items = [], error = null }) {
   if (!online) {
     return {

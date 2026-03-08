@@ -28,7 +28,7 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 | `start` | 启动本地 API 服务 | ✅ |
 | `init` | 首次初始化 | ✅ |
 | `recommend` | 查看推荐 | ✅ |
-| `feedback <id> <like\|dislike>` | 对推荐提交反馈 | ✅ |
+| `feedback <id> <like\|dislike\|comment>` | 对推荐提交反馈 | ✅ |
 | `profile` | 查看用户画像 | ✅ |
 | `discover` | 手动触发发现 | ✅ |
 | `chat` | 苏格拉底式对话 | ✅ |
@@ -197,9 +197,9 @@ $ openbiliclaw recommend
 openbiliclaw discover
 ```
 
-### `openbiliclaw feedback <id> <like|dislike>`
+### `openbiliclaw feedback <id> <like|dislike|comment>`
 
-为一条已展示的推荐记录写入结构化反馈，可附带备注。
+为一条已展示的推荐记录写入结构化反馈，可附带备注；`comment` 必须带 `--note`。
 
 ```bash
 $ openbiliclaw feedback 7 dislike --note "太浅了"
@@ -208,6 +208,8 @@ $ openbiliclaw feedback 7 dislike --note "太浅了"
   推荐ID: 7
   反馈: dislike
   备注: 太浅了
+
+$ openbiliclaw feedback 7 comment --note "方向对，但我想看更深一点。"
 ```
 
 ### `openbiliclaw discover`

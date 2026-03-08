@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildFeedbackPayload,
   buildVideoUrl,
   getPopupState,
   normalizeRecommendation,
+  validateCommentInput,
 } from "../popup/popup-helpers.js";
 
 test("buildVideoUrl builds bilibili video url from bvid", () => {
@@ -63,4 +65,38 @@ test("getPopupState distinguishes offline empty and ready states", () => {
   assert.equal(ready.kind, "ready");
   assert.equal(ready.items.length, 1);
   assert.equal(ready.items[0]?.bvid, "BV1ready");
+});
+
+test("buildFeedbackPayload builds like and dislike payloads", () => {
+  assert.deepEqual(buildFeedbackPayload(7, "like"), {
+    recommendation_id: 7,
+    feedback_type: "like",
+    note: "",
+  });
+
+  assert.deepEqual(buildFeedbackPayload(8, "dislike"), {
+    recommendation_id: 8,
+    feedback_type: "dislike",
+    note: "",
+  });
+});
+
+test("validateCommentInput requires non-empty note", () => {
+  assert.deepEqual(validateCommentInput(""), {
+    valid: false,
+    message: "请先写一句你的想法。",
+  });
+
+  assert.deepEqual(validateCommentInput("  方向不错  "), {
+    valid: true,
+    message: "",
+  });
+});
+
+test("buildFeedbackPayload trims comment note", () => {
+  assert.deepEqual(buildFeedbackPayload(9, "comment", "  方向不错，但我想看更深一点。 "), {
+    recommendation_id: 9,
+    feedback_type: "comment",
+    note: "方向不错，但我想看更深一点。",
+  });
 });

@@ -469,8 +469,11 @@ def feedback(
     """对一条推荐记录提交反馈."""
     _require_runtime_config()
     normalized_signal = signal.strip().lower()
-    if normalized_signal not in {"like", "dislike"}:
-        _print_status_panel("error", "反馈类型无效", "仅支持: like, dislike")
+    if normalized_signal not in {"like", "dislike", "comment"}:
+        _print_status_panel("error", "反馈类型无效", "仅支持: like, dislike, comment")
+        raise typer.Exit(code=1)
+    if normalized_signal == "comment" and not note.strip():
+        _print_status_panel("error", "comment 需要备注", "请通过 `--note` 补充一句你的想法。")
         raise typer.Exit(code=1)
 
     recommendation_engine = _build_recommendation_engine()
@@ -484,7 +487,7 @@ def feedback(
         recommendation_engine.record_feedback(
             recommendation_id,
             feedback_type=normalized_signal,
-            note=note,
+            note=note.strip(),
         )
     )
     asyncio.run(
@@ -496,7 +499,7 @@ def feedback(
                     "recommendation_id": recommendation_id,
                     "bvid": recommendation.get("bvid", ""),
                     "feedback_type": normalized_signal,
-                    "feedback_note": note,
+                    "feedback_note": note.strip(),
                 },
             }
         )
@@ -508,7 +511,7 @@ def feedback(
         ("反馈", normalized_signal),
     ]
     if note:
-        rows.append(("备注", note))
+        rows.append(("备注", note.strip()))
     _print_key_value_table("反馈详情", rows)
 
 

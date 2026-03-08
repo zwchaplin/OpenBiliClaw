@@ -734,6 +734,72 @@ def test_feedback_command_reports_missing_recommendation(
     assert "推荐不存在" in result.stdout
 
 
+def test_feedback_command_supports_comment_with_note(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    class FakeRecommendationEngine:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, str, str]] = []
+
+        async def record_feedback(
+            self,
+            recommendation_id: int,
+            *,
+            feedback_type: str,
+            note: str = "",
+        ) -> None:
+            self.calls.append((recommendation_id, feedback_type, note))
+
+        def get_recommendation(self, recommendation_id: int) -> dict[str, object] | None:
+            return {"id": recommendation_id, "bvid": "BV1REC", "title": "讲透城市与建筑"}
+
+    class FakeMemoryManager:
+        def __init__(self) -> None:
+            self.events: list[dict[str, object]] = []
+
+        async def propagate_event(self, event: dict[str, object]) -> None:
+            self.events.append(event)
+
+    fake_engine = FakeRecommendationEngine()
+    fake_memory = FakeMemoryManager()
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_build_recommendation_engine",
+        lambda: fake_engine,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_build_memory_manager",
+        lambda: fake_memory,
+        raising=False,
+    )
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(
+        app,
+        ["feedback", "7", "comment", "--note", "方向对，但我想看更深一点的。"],
+    )
+
+    assert result.exit_code == 0
+    assert "反馈已记录" in result.stdout
+    assert fake_engine.calls == [(7, "comment", "方向对，但我想看更深一点的。")]
+    assert fake_memory.events[0]["metadata"]["feedback_type"] == "comment"
+
+
+def test_feedback_command_requires_note_for_comment(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["feedback", "7", "comment"])
+
+    assert result.exit_code == 1
+    assert "comment 需要" in result.stdout
+
+
 def test_init_reports_authentication_failure(
     monkeypatch: pytest.MonkeyPatch, runner: CliRunner, tmp_path: Path
 ) -> None:
