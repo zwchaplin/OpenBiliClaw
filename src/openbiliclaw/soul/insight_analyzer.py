@@ -9,6 +9,7 @@ from typing import Protocol
 
 from openbiliclaw.llm.base import LLMProviderError, LLMResponse
 from openbiliclaw.llm.prompts import build_insight_prompt
+from openbiliclaw.llm.service import LLMServiceError
 
 from .profile import AwarenessNote, InsightHypothesis
 
@@ -24,6 +25,18 @@ class SupportsComplete(Protocol):
     ) -> LLMResponse: ...
 
 
+class SupportsStructuredTask(Protocol):
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> LLMResponse: ...
+
+
 class InsightGenerationError(Exception):
     """Raised when insight generation fails or returns invalid data."""
 
@@ -32,7 +45,7 @@ class InsightGenerationError(Exception):
 class InsightAnalyzer:
     """Generate and merge structured insight hypotheses."""
 
-    registry: SupportsComplete
+    registry: SupportsComplete | SupportsStructuredTask
 
     async def analyze(
         self,
@@ -47,8 +60,8 @@ class InsightAnalyzer:
             soul_profile=soul_profile,
         )
         try:
-            response = await self.registry.complete(messages, json_mode=True)
-        except LLMProviderError as exc:
+            response = await self._complete(messages)
+        except (LLMProviderError, LLMServiceError) as exc:
             raise InsightGenerationError(str(exc)) from exc
         payload = self._parse_response(response.content)
         return [self._build_hypothesis(item) for item in payload if isinstance(item, dict)]
@@ -133,3 +146,11 @@ class InsightAnalyzer:
         else:
             value = 0.5
         return max(0.0, min(1.0, round(value, 4)))
+
+    async def _complete(self, messages: list[dict[str, str]]) -> LLMResponse:
+        if hasattr(self.registry, "complete_structured_task"):
+            return await self.registry.complete_structured_task(
+                system_instruction=messages[0]["content"],
+                user_input=messages[1]["content"],
+            )
+        return await self.registry.complete(messages, json_mode=True)

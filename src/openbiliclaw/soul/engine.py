@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from openbiliclaw.llm.base import LLMProvider
+    from openbiliclaw.llm.service import LLMService
     from openbiliclaw.memory.manager import MemoryManager
 
 from .awareness_analyzer import AwarenessAnalyzer
@@ -50,12 +51,15 @@ class SoulEngine:
     """
 
     def __init__(self, llm: LLMProvider, memory: MemoryManager) -> None:
+        from openbiliclaw.llm.service import LLMService
+
         self._llm = llm
         self._memory = memory
-        self._awareness_analyzer = AwarenessAnalyzer(llm)
-        self._insight_analyzer = InsightAnalyzer(llm)
-        self._preference_analyzer = PreferenceAnalyzer(llm)
-        self._profile_builder = ProfileBuilder(llm)
+        self._llm_service: LLMService = LLMService(registry=llm, memory=memory)
+        self._awareness_analyzer = AwarenessAnalyzer(self._llm_service)
+        self._insight_analyzer = InsightAnalyzer(self._llm_service)
+        self._preference_analyzer = PreferenceAnalyzer(self._llm_service)
+        self._profile_builder = ProfileBuilder(self._llm_service)
 
     async def analyze_events(self, events: list[dict[str, Any]]) -> None:
         """Analyze new behavioral events and update all memory layers.

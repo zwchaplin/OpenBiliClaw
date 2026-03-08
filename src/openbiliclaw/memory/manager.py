@@ -162,7 +162,9 @@ class MemoryManager:
         top_interests = preference_summary.get("top_interests", [])
         if top_interests:
             interest_text = ", ".join(
-                item["name"] for item in top_interests if isinstance(item, dict) and item.get("name")
+                item["name"]
+                for item in top_interests
+                if isinstance(item, dict) and item.get("name")
             )
             if interest_text:
                 preference_lines.append(f"兴趣标签: {interest_text}")

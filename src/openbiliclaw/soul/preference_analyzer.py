@@ -9,6 +9,7 @@ from typing import Protocol
 
 from openbiliclaw.llm.base import LLMProviderError, LLMResponse
 from openbiliclaw.llm.prompts import build_preference_analysis_prompt
+from openbiliclaw.llm.service import LLMServiceError
 
 
 class SupportsComplete(Protocol):
@@ -22,6 +23,18 @@ class SupportsComplete(Protocol):
     ) -> LLMResponse: ...
 
 
+class SupportsStructuredTask(Protocol):
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> LLMResponse: ...
+
+
 class PreferenceAnalysisError(Exception):
     """Raised when preference extraction fails or returns invalid data."""
 
@@ -30,7 +43,7 @@ class PreferenceAnalysisError(Exception):
 class PreferenceAnalyzer:
     """Analyze recent events into a structured preference profile."""
 
-    registry: SupportsComplete
+    registry: SupportsComplete | SupportsStructuredTask
     decay_factor_per_week: float = 0.9
     min_interest_weight: float = 0.05
 
@@ -46,8 +59,8 @@ class PreferenceAnalyzer:
             existing_preference=existing_preference,
         )
         try:
-            response = await self.registry.complete(messages, json_mode=True)
-        except LLMProviderError as exc:
+            response = await self._complete(messages)
+        except (LLMProviderError, LLMServiceError) as exc:
             raise PreferenceAnalysisError(str(exc)) from exc
 
         raw_preference = self._parse_response(response.content)
@@ -265,3 +278,11 @@ class PreferenceAnalyzer:
             "disliked_topics": [],
             "favorite_up_users": [],
         }
+
+    async def _complete(self, messages: list[dict[str, str]]) -> LLMResponse:
+        if hasattr(self.registry, "complete_structured_task"):
+            return await self.registry.complete_structured_task(
+                system_instruction=messages[0]["content"],
+                user_input=messages[1]["content"],
+            )
+        return await self.registry.complete(messages, json_mode=True)

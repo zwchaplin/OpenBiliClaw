@@ -8,6 +8,7 @@ from typing import Protocol
 
 from openbiliclaw.llm.base import LLMProviderError, LLMResponse
 from openbiliclaw.llm.prompts import build_awareness_prompt
+from openbiliclaw.llm.service import LLMServiceError
 
 from .profile import AwarenessNote
 
@@ -23,6 +24,18 @@ class SupportsComplete(Protocol):
     ) -> LLMResponse: ...
 
 
+class SupportsStructuredTask(Protocol):
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> LLMResponse: ...
+
+
 class AwarenessGenerationError(Exception):
     """Raised when awareness generation fails or returns invalid data."""
 
@@ -31,7 +44,7 @@ class AwarenessGenerationError(Exception):
 class AwarenessAnalyzer:
     """Generate structured recent-awareness notes from events."""
 
-    registry: SupportsComplete
+    registry: SupportsComplete | SupportsStructuredTask
 
     async def analyze(
         self,
@@ -46,8 +59,8 @@ class AwarenessAnalyzer:
             soul_profile=soul_profile,
         )
         try:
-            response = await self.registry.complete(messages, json_mode=True)
-        except LLMProviderError as exc:
+            response = await self._complete(messages)
+        except (LLMProviderError, LLMServiceError) as exc:
             raise AwarenessGenerationError(str(exc)) from exc
         payload = self._parse_response(response.content)
         return [self._build_note(item) for item in payload if isinstance(item, dict)]
@@ -94,3 +107,11 @@ class AwarenessAnalyzer:
     @staticmethod
     def _normalize_text(value: str) -> str:
         return "".join(value.split())
+
+    async def _complete(self, messages: list[dict[str, str]]) -> LLMResponse:
+        if hasattr(self.registry, "complete_structured_task"):
+            return await self.registry.complete_structured_task(
+                system_instruction=messages[0]["content"],
+                user_input=messages[1]["content"],
+            )
+        return await self.registry.complete(messages, json_mode=True)

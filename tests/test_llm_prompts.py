@@ -14,7 +14,7 @@ def test_render_core_memory_prompt_includes_soul_and_preferences(tmp_path: Path)
     prompt = memory.render_core_memory_prompt()
 
     assert "理性又敏感" in prompt
-    assert "favorite_up_users" in prompt
+    assert "常看UP主" in prompt
     assert "影视飓风" in prompt
 
 

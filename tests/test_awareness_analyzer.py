@@ -25,6 +25,24 @@ class FakeRegistry:
         return LLMResponse(content=self.content, provider="openai")
 
 
+class FakeStructuredService:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls: list[dict[str, object]] = []
+
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        self.calls.append({"system_instruction": system_instruction, "user_input": user_input})
+        return LLMResponse(content=self.content, provider="openai")
+
+
 @pytest.mark.asyncio
 async def test_awareness_analyzer_builds_notes_from_recent_events() -> None:
     from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
@@ -94,3 +112,31 @@ def test_merge_awareness_notes_deduplicates_same_day_observation() -> None:
     merged = analyzer.merge_notes(existing, incoming)
 
     assert len(merged) == 1
+
+
+@pytest.mark.asyncio
+async def test_awareness_analyzer_can_use_unified_service() -> None:
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    service = FakeStructuredService(
+        json.dumps(
+            [
+                {
+                    "date": "2026-03-08",
+                    "observation": "最近更专注。",
+                    "trend": "更偏向深度浏览。",
+                    "emotion_guess": "可能在主动整理信息。",
+                }
+            ],
+            ensure_ascii=False,
+        )
+    )
+
+    notes = await AwarenessAnalyzer(service).analyze(
+        events=[{"event_type": "view", "title": "AI 视频"}],
+        preference={},
+        soul_profile={},
+    )
+
+    assert notes[0].observation == "最近更专注。"
+    assert service.calls

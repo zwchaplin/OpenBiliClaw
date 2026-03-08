@@ -29,6 +29,24 @@ class FakeRegistry:
         return self.response or LLMResponse(content="", provider="openai")
 
 
+class FakeStructuredService:
+    def __init__(self, response: LLMResponse | None = None) -> None:
+        self.response = response or LLMResponse(content="{}", provider="openai")
+        self.calls: list[dict[str, object]] = []
+
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        self.calls.append({"system_instruction": system_instruction, "user_input": user_input})
+        return self.response
+
+
 @pytest.mark.asyncio
 async def test_analyze_events_parses_structured_preference_output() -> None:
     from openbiliclaw.soul.preference_analyzer import PreferenceAnalyzer
@@ -135,3 +153,23 @@ async def test_provider_error_is_wrapped() -> None:
             events=[{"event_type": "view", "title": "x"}],
             existing_preference={},
         )
+
+
+@pytest.mark.asyncio
+async def test_preference_analyzer_can_use_unified_service() -> None:
+    from openbiliclaw.soul.preference_analyzer import PreferenceAnalyzer
+
+    service = FakeStructuredService(
+        LLMResponse(
+            content='{"interests": [{"name": "科技", "category": "知识", "weight": 0.7}]}',
+            provider="openai",
+        )
+    )
+
+    preference = await PreferenceAnalyzer(service).analyze_events(
+        events=[{"event_type": "view", "title": "AI 视频"}],
+        existing_preference={},
+    )
+
+    assert preference["interests"][0]["name"] == "科技"
+    assert service.calls
