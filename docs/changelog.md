@@ -6,6 +6,12 @@
 
 ## M8: 插件后端 API（进行中）
 
+### 插件侧边栏模式 — `extension-sidepanel`
+
+- 扩展入口从 `action.default_popup` 切到 `side_panel.default_path`，点击扩展图标时会优先打开侧边栏
+- service worker 新增统一的扩展 UI 打开链，通知和认知提醒也会优先把用户带回插件侧边栏上下文
+- 现有 `popup/` 页面继续复用，但布局已从固定小弹窗改成更适合侧边栏浏览的长页面容器
+
 ### Popup 手动刷新推荐 — `extension/m86-manual-refresh`
 
 - popup 推荐 tab 新增“立即刷新”按钮，点击后会调用 `/api/recommendations/refresh` 触发一次完整补货
