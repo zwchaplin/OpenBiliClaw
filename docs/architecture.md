@@ -33,11 +33,13 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 ### Content Discovery (`discovery/`)
 - 多策略内容发现
 - 内容评估（基于用户 Soul）
-- 策略自省和调整
+- 两阶段候选供给（primary + backfill）
+- 候选分层、去重和缓存写入
 
 ### Recommendation Engine (`recommendation/`)
 - 推荐排序
 - 朋友式推荐表达生成
+- 缓存候选与实时候选统一排序
 - 个性化专题生成
 
 ### Bilibili Client (`bilibili/`)
@@ -53,4 +55,4 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 ### Storage (`storage/`)
 - SQLite 数据库管理
 - 向量索引
-- 数据迁移
+- 候选质量信号持久化与数据迁移

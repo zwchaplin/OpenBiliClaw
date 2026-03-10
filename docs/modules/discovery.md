@@ -15,10 +15,6 @@
 - **RelatedChainStrategy** — 从近期高价值视频种子出发，沿相关推荐链扩展候选内容
 - **ExploreStrategy** — 推断“高相关的远域探索方向”，寻找更有陌生感但仍可解释的内容
 
-后续会在这个模块继续补：
-
-- 多策略并行编排与缓存写入
-
 ## 已实现功能
 
 | 任务 | 状态 | 说明 |
@@ -29,6 +25,7 @@
 | 5.4 跨领域探索策略 | ✅ | 远域探索领域生成 + query 搜索 + exploration bonus |
 | 5.5 内容评估 | ✅ | `evaluate_content()` 已被四类发现策略复用 |
 | 5.6 发现引擎编排 | ✅ | 并发执行策略 + 高分去重 + SQLite 缓存写入 |
+| 候选供给升级 | ✅ | 主发现不足时触发 backfill，并把相关性 / 候选层级写入缓存 |
 
 ## 公开 API
 
@@ -38,7 +35,11 @@
 from openbiliclaw.discovery.engine import ContentDiscoveryEngine
 from openbiliclaw.discovery.strategies.strategies import SearchStrategy
 
-engine = ContentDiscoveryEngine()
+engine = ContentDiscoveryEngine(
+    database=db,
+    target_primary_count=12,
+    backfill_target_count=18,
+)
 engine.register_strategy(
     SearchStrategy(
         llm_service=service,
@@ -57,7 +58,9 @@ assert 0.0 <= score <= 1.0
 
 - `discover()` 现在会并发执行多个已注册 strategy
 - 同一 `bvid` 若被多个策略命中，保留 `relevance_score` 更高的版本
-- 最终结果按分数降序返回，并写入 `content_cache`
+- 主候选少于目标数量时，会依次尝试策略 backfill 和历史缓存 backfill
+- 排序口径优先 `candidate_tier`，再看 `relevance_score`、`last_scored_at`、`view_count`
+- 最终结果会把 `relevance_score`、`relevance_reason`、`candidate_tier` 一并写入 `content_cache`
 
 ### SearchStrategy
 
@@ -69,6 +72,7 @@ strategy = SearchStrategy(
     bilibili_client=bilibili_client,
     queries_per_run=8,
     page_size=10,
+    max_pages=1,
 )
 
 items = await strategy.discover(profile, limit=20)
@@ -78,6 +82,7 @@ items = await strategy.discover(profile, limit=20)
 
 - 优先通过 `LLMService.complete_structured_task()` 生成 5 到 10 个 B 站搜索词
 - LLM 返回坏 JSON 或空结果时，回退到本地兴趣标签 query
+- 正常模式默认抓每个 query 的第一页；backfill 变体会放大 query 数和页数
 - 对多个 query 的搜索结果按 `bvid` 去重
 - 将结果映射为 `DiscoveredContent`
 
@@ -175,6 +180,11 @@ item = DiscoveredContent(
 - `view_count`
 - `description`
 - `source_strategy`
+- `relevance_score`
+- `relevance_reason`
+- `candidate_tier`
+- `discovered_at`
+- `last_scored_at`
 
 ## 设计决策
 
@@ -185,5 +195,6 @@ item = DiscoveredContent(
 5. **相关推荐链优先复用真实行为**：种子优先来自近期事件，其次才是偏好补种子和策略兜底
 6. **跨领域探索强调“可解释的陌生感”**：不是越远越好，而是“主题陌生，但心理需求上说得通”
 7. **评分入口集中在引擎层**：`ContentDiscoveryEngine.evaluate_content()` 统一负责把 `score/reason` 写回 `DiscoveredContent`
-8. **发现引擎承担最终收口职责**：策略负责找内容，引擎负责并发调度、去重排序和缓存写入
+8. **发现引擎承担最终收口职责**：策略负责找内容，引擎负责并发调度、去重排序、分层补货和缓存写入
 9. **引擎层仍不负责依赖创建**：`ContentDiscoveryEngine` 接收外部注入的 `llm_service` / `database`，策略继续显式注入 client/service
+10. **补货是显式分层而不是无脑放宽**：主发现优先，backfill 只在候选不足时介入，并通过 `candidate_tier` 保留来源语义
