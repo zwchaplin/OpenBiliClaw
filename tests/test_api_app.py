@@ -481,6 +481,75 @@ class TestBackendAPI:
             ]
         }
 
+    def test_append_recommendations_endpoint_excludes_existing_bvids(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeSoulEngine:
+            async def get_profile(self) -> dict[str, object]:
+                return {"profile": "ok"}
+
+        class FakeRecommendationEngine:
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, list[str], int]] = []
+
+            async def append_recommendations(
+                self,
+                *,
+                profile: object,
+                excluded_bvids: list[str],
+                limit: int = 10,
+            ) -> list[object]:
+                self.calls.append((profile, excluded_bvids, limit))
+                from openbiliclaw.discovery.engine import DiscoveredContent
+                from openbiliclaw.recommendation.engine import Recommendation
+
+                return [
+                    Recommendation(
+                        content=DiscoveredContent(
+                            bvid="BV1NEXT",
+                            title="下一批 1",
+                            up_name="UPB",
+                            cover_url="https://i0.hdslb.com/bfs/archive/next-cover.jpg",
+                        ),
+                        recommendation_id=22,
+                        expression="这条接在你刚刚看的后面也顺。",
+                        topic_label="下一条",
+                        confidence=0.81,
+                        presented=False,
+                    )
+                ]
+
+        recommendation_engine = FakeRecommendationEngine()
+        app = create_app(
+            memory_manager=object(),
+            database=object(),
+            soul_engine=FakeSoulEngine(),
+            recommendation_engine=recommendation_engine,
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/recommendations/append",
+            json={"excluded_bvids": ["BV1A", "BV1B"]},
+        )
+
+        assert response.status_code == 200
+        assert recommendation_engine.calls == [({"profile": "ok"}, ["BV1A", "BV1B"], 10)]
+        assert response.json() == {
+            "items": [
+                {
+                    "id": 22,
+                    "bvid": "BV1NEXT",
+                    "title": "下一批 1",
+                    "up_name": "UPB",
+                    "cover_url": "https://i0.hdslb.com/bfs/archive/next-cover.jpg",
+                    "expression": "这条接在你刚刚看的后面也顺。",
+                    "topic_label": "下一条",
+                    "presented": False,
+                }
+            ]
+        }
+
     def test_pending_notification_endpoint_returns_single_candidate(self) -> None:
         from fastapi.testclient import TestClient
 

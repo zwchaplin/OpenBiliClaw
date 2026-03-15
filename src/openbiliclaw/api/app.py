@@ -29,6 +29,7 @@ from openbiliclaw.api.models import (
     PendingNotificationOut,
     PendingNotificationResponse,
     ProfileSummaryResponse,
+    RecommendationAppendIn,
     RecommendationListResponse,
     RecommendationOut,
     RecommendationRefreshResponse,
@@ -206,6 +207,21 @@ def create_app(
     @app.get("/api/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok", service="openbiliclaw-api")
+
+    def _serialize_recommendation_items(items: list[Any]) -> list[RecommendationOut]:
+        return [
+            RecommendationOut(
+                id=int(item.recommendation_id),
+                bvid=str(item.content.bvid),
+                title=str(item.content.title),
+                up_name=str(item.content.up_name),
+                cover_url=str(item.content.cover_url),
+                expression=str(item.expression),
+                topic_label=str(item.topic_label),
+                presented=bool(item.presented),
+            )
+            for item in items
+        ]
 
     @app.websocket("/api/runtime-stream")
     async def runtime_stream(websocket: WebSocket) -> None:
@@ -397,21 +413,24 @@ def create_app(
         except Exception:
             return RecommendationReshuffleResponse(items=[])
         items = await recommendation_engine.reshuffle_recommendations(profile=profile, limit=10)
-        return RecommendationReshuffleResponse(
-            items=[
-                RecommendationOut(
-                    id=int(item.recommendation_id),
-                    bvid=str(item.content.bvid),
-                    title=str(item.content.title),
-                    up_name=str(item.content.up_name),
-                    cover_url=str(item.content.cover_url),
-                    expression=str(item.expression),
-                    topic_label=str(item.topic_label),
-                    presented=bool(item.presented),
-                )
-                for item in items
-            ]
+        return RecommendationReshuffleResponse(items=_serialize_recommendation_items(items))
+
+    @app.post("/api/recommendations/append", response_model=RecommendationReshuffleResponse)
+    async def append_recommendations(
+        payload: RecommendationAppendIn,
+    ) -> RecommendationReshuffleResponse:
+        if recommendation_engine is None or soul_engine is None:
+            return RecommendationReshuffleResponse(items=[])
+        try:
+            profile = await soul_engine.get_profile()
+        except Exception:
+            return RecommendationReshuffleResponse(items=[])
+        items = await recommendation_engine.append_recommendations(
+            profile=profile,
+            excluded_bvids=payload.excluded_bvids,
+            limit=10,
         )
+        return RecommendationReshuffleResponse(items=_serialize_recommendation_items(items))
 
     @app.post("/api/recommendations/refresh", response_model=RecommendationRefreshResponse)
     async def refresh_recommendations() -> RecommendationRefreshResponse:

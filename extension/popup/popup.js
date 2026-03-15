@@ -23,6 +23,7 @@ import {
 } from "./popup-helpers.js";
 import { createRuntimeStreamClient } from "./popup-stream.js";
 import {
+  appendRecommendations,
   checkBackendStatus,
   fetchActivityFeed,
   fetchProfileSummary,
@@ -38,6 +39,8 @@ const state = {
   activeTab: "recommend",
   online: false,
   recommendations: [],
+  loadingMore: false,
+  hasMoreRecommendations: true,
   profile: null,
   profileLoaded: false,
   profileCognitionHistory: {
@@ -690,11 +693,13 @@ function createCommentComposer(item, statusLine) {
   return { wrapper, input, resetComposerUi };
 }
 
-function renderRecommendations(items) {
+function renderRecommendations(items, { append = false } = {}) {
   if (!(elements.list instanceof HTMLElement)) {
     return;
   }
-  elements.list.replaceChildren();
+  if (!append) {
+    elements.list.replaceChildren();
+  }
 
   for (const item of items) {
     const card = document.createElement("article");
@@ -882,6 +887,66 @@ function renderRecommendations(items) {
   }
 }
 
+function getDisplayedRecommendationBvids() {
+  return state.recommendations
+    .map((item) => String(item?.bvid ?? "").trim())
+    .filter(Boolean);
+}
+
+async function loadMoreRecommendations() {
+  if (!state.online || state.loadingMore || !state.hasMoreRecommendations) {
+    return;
+  }
+  state.loadingMore = true;
+  setHint("再给你往下捞 10 条。", "info");
+  try {
+    const result = await appendRecommendations(getDisplayedRecommendationBvids());
+    const incoming = Array.isArray(result.items) ? result.items : [];
+    const existing = new Set(getDisplayedRecommendationBvids());
+    const appended = incoming.filter((item) => {
+      const bvid = String(item?.bvid ?? "").trim();
+      if (!bvid || existing.has(bvid)) {
+        return false;
+      }
+      existing.add(bvid);
+      return true;
+    });
+
+    if (appended.length > 0) {
+      state.recommendations = [...state.recommendations, ...appended];
+      renderRecommendations(appended, { append: true });
+      setHint(`又给你续了 ${appended.length} 条，继续往下翻。`, "success");
+    } else if (incoming.length === 0) {
+      setHint("这池先翻到头了，等后台再补点新的。", "info");
+    } else {
+      setHint("这轮续页里没有更合适的新条目了。", "info");
+    }
+
+    state.hasMoreRecommendations = incoming.length >= 10 && appended.length > 0;
+  } catch {
+    setHint("这次往下续没成功，稍后再试。", "error");
+  } finally {
+    state.loadingMore = false;
+  }
+}
+
+function maybeLoadMoreRecommendations() {
+  if (
+    state.activeTab !== "recommend" ||
+    !(elements.content instanceof HTMLElement) ||
+    elements.viewRecommend.hidden ||
+    state.loadingMore ||
+    !state.hasMoreRecommendations
+  ) {
+    return;
+  }
+
+  const remaining = elements.content.scrollHeight - elements.content.scrollTop - elements.content.clientHeight;
+  if (remaining <= 96) {
+    void loadMoreRecommendations();
+  }
+}
+
 function renderRecommendationState(stateShape) {
   if (stateShape.kind === "ready") {
     hideRecommendationEmptyState();
@@ -1063,6 +1128,9 @@ async function initializeRecommendations() {
 
   if (!online) {
     state.runtimeStatus = null;
+    state.recommendations = [];
+    state.hasMoreRecommendations = false;
+    state.loadingMore = false;
     renderRecommendationState(getPopupState({ online, items: [], runtimeStatus: null }));
     renderProfileSummary(normalizeProfileSummary({ initialized: false }));
     return;
@@ -1079,6 +1147,8 @@ async function initializeRecommendations() {
 
   if (recommendationResult.status === "fulfilled") {
     state.recommendations = recommendationResult.value;
+    state.loadingMore = false;
+    state.hasMoreRecommendations = state.recommendations.length >= 10;
     renderRecommendationState(
       getPopupState({
         online,
@@ -1089,6 +1159,9 @@ async function initializeRecommendations() {
     return;
   }
 
+  state.recommendations = [];
+  state.loadingMore = false;
+  state.hasMoreRecommendations = false;
   renderRecommendationState(
     getPopupState({
       online,
@@ -1108,6 +1181,8 @@ async function handleManualRefresh() {
       return;
     }
     state.recommendations = result.items;
+    state.loadingMore = false;
+    state.hasMoreRecommendations = result.items.length >= 10;
     state.runtimeStatus = await fetchRuntimeStatus().catch(() => state.runtimeStatus);
     renderPoolStatus(state.runtimeStatus);
     renderRecommendationState(
@@ -1151,6 +1226,7 @@ function bindProfileHistoryLoading() {
   if (elements.content instanceof HTMLElement) {
     elements.content.addEventListener("scroll", () => {
       maybeLoadMoreCognitionHistory();
+      maybeLoadMoreRecommendations();
     });
   }
 

@@ -54,6 +54,12 @@ class RecommendationReshuffleResponse(BaseModel):
     items: list[RecommendationOut]
 
 
+class RecommendationAppendIn(BaseModel):
+    """Request payload for appending another recommendation page."""
+
+    excluded_bvids: list[str] = Field(default_factory=list)
+
+
 class RecommendationRefreshResponse(BaseModel):
     """Result of one explicit recommendation refresh request."""
 

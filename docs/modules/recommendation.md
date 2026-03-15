@@ -29,6 +29,7 @@
 | M118 topic_key 多样性强化 | ✅ | discovery pool 现在会持久化 `topic_key`，推荐层会优先按 `topic_key` 分桶再回填，减少同一 seed chain 或同类 query 连续刷屏 |
 | M119 风格多样性与快速文案增强 | ✅ | `reshuffle` 现在会同时约束 `topic_key + style_key`，并把快速 fallback 文案润色成更自然的老B友短句 |
 | M120 来源上限与硬配比 | ✅ | `reshuffle` 现在会对 `topic_key + style_key + source` 同时加硬上限，小批次优先保留不同来源，10 条一批时单一来源最多 3 条 |
+| M121 推荐自动续页 | ✅ | popup 滚到底时现在会调用 `append` 从 discovery pool 再续 10 条，不再只能整组“换一批” |
 
 ## 公开 API
 
@@ -78,6 +79,24 @@ items = await engine.reshuffle_recommendations(
 - 如果候选还没有朋友式 `expression`，会优先使用按 `style_key` 润色过的快速 fallback 文案，而不是直接裸用 `relevance_reason`
 - 命中候选后会立即写入 `recommendations` 表，并把对应池子项标记为 `shown`
 - runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，默认目标现在是 `150`，保证 popup 连续“换一批”时尽量随时有货
+
+### RecommendationEngine.append_recommendations
+
+```python
+items = await engine.append_recommendations(
+    profile=profile,
+    excluded_bvids=["BV1A", "BV1B"],
+    limit=10,
+)
+```
+
+行为说明：
+
+- 用于 popup 推荐流的续页，不会清空当前列表
+- 会先排除前端已经展示过的 `excluded_bvids`
+- 仍然走 discovery pool 快路径，不等待新一轮 discover 完成
+- 同样复用 `topic_key + style_key + source` 的多样性选择逻辑
+- 追加命中的内容也会立即写入 `recommendations` 表，并把对应池子项标记为 `shown`
 
 ### Recommendation
 

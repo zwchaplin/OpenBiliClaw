@@ -402,6 +402,46 @@ async def test_reshuffle_recommendations_uses_pool_reason_without_waiting_expres
 
 
 @pytest.mark.asyncio
+async def test_append_recommendations_skips_excluded_bvids() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        db.cache_content(
+            "BV1A",
+            title="第一条",
+            up_name="UPA",
+            source="search",
+            relevance_score=0.95,
+            relevance_reason="第一条基础理由。",
+        )
+        db.cache_content(
+            "BV1B",
+            title="第二条",
+            up_name="UPB",
+            source="trending",
+            relevance_score=0.94,
+            relevance_reason="第二条基础理由。",
+        )
+        db.cache_content(
+            "BV1C",
+            title="第三条",
+            up_name="UPC",
+            source="related_chain",
+            relevance_score=0.93,
+            relevance_reason="第三条基础理由。",
+        )
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        recommendations = await engine.append_recommendations(
+            profile=_build_profile(),
+            excluded_bvids=["BV1A", "BV1B"],
+            limit=2,
+        )
+
+        assert [item.content.bvid for item in recommendations] == ["BV1C"]
+
+
+@pytest.mark.asyncio
 async def test_reshuffle_recommendations_skips_recently_viewed_content() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")

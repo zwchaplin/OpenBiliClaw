@@ -30,6 +30,12 @@
 - popup「我的画像」页新增 `最近明显会避开` 分组，不再只能看到“喜欢什么”，也能看到稳定避雷方向
 - 画像生成 prompt 里 `core_traits` 的建议上限也已从 `5` 放宽到 `6`，避免前端扩容后后端长期仍只吐固定 3~5 条
 
+### popup 推荐自动续页
+
+- 新增 `POST /api/recommendations/append`，popup 推荐 tab 滚到底时会继续从 discovery pool 追加下一批 10 条
+- 自动续页会把当前已展示的 `bvid` 传给后端排除，避免追加时和当前列表重复
+- `换一批` 仍保留为整组重开；自动续页只负责在当前列表底部继续往下接内容
+
 ### SQLite 修复与防损坏加固
 
 - 新增 `openbiliclaw db-repair`，会先检查完整性、拒绝带占用修复、备份 `db/db-wal`，再尝试恢复到 repaired 副本并切换正式库

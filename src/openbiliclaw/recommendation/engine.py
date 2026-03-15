@@ -185,6 +185,52 @@ class RecommendationEngine:
         self._database.mark_pool_items_shown(shown_bvids)
         return recommendations
 
+    async def append_recommendations(
+        self,
+        *,
+        profile: SoulProfile,
+        excluded_bvids: list[str],
+        limit: int = 10,
+    ) -> list[Recommendation]:
+        """Append another page of recommendations from the discovery pool."""
+        excluded = {item.strip() for item in excluded_bvids if item and item.strip()}
+        candidates = self._load_pool_candidates(limit=max(limit * 4, 40))
+        candidates = [item for item in candidates if item.bvid not in excluded]
+        candidates = self._exclude_recently_viewed(candidates)
+        logger.info(
+            "Recommendation candidate summary (append): %s",
+            json.dumps(self._build_debug_summary(candidates), ensure_ascii=False),
+        )
+        ranked = self._select_diversified_batch(candidates, limit=limit)
+        logger.info(
+            "Recommendation picked summary (append): %s",
+            json.dumps(self._build_debug_summary(ranked), ensure_ascii=False),
+        )
+
+        recommendations: list[Recommendation] = []
+        shown_bvids: list[str] = []
+        for item in ranked:
+            expression = item.relevance_reason.strip() or self._fallback_expression(item)
+            recommendation = Recommendation(
+                content=item,
+                confidence=item.relevance_score,
+                presented=False,
+                expression=expression,
+                topic_label="",
+            )
+            recommendation.recommendation_id = self._database.insert_recommendation(
+                item.bvid,
+                confidence=recommendation.confidence,
+                expression=recommendation.expression,
+                topic=recommendation.topic_label,
+                presented=0,
+            )
+            recommendations.append(recommendation)
+            shown_bvids.append(item.bvid)
+
+        self._database.mark_pool_items_shown(shown_bvids)
+        return recommendations
+
     async def generate_personal_topic(
         self,
         recommendations: list[Recommendation],

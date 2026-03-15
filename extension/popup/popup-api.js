@@ -30,6 +30,16 @@ export async function reshuffleRecommendations() {
   return requestJson("/recommendations/reshuffle", { method: "POST" });
 }
 
+export async function appendRecommendations(excludedBvids = []) {
+  return requestJson("/recommendations/append", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ excluded_bvids: excludedBvids }),
+  });
+}
+
 export async function fetchRuntimeStatus() {
   return requestJson("/runtime-status", { method: "GET" });
 }

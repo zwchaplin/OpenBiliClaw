@@ -9,5 +9,6 @@ test("profile cognition auto-load listens to the shared content scroller", () =>
   assert.match(popupJs, /content:\s*document\.querySelector\("\.content"\)/);
   assert.match(popupJs, /elements\.content\.scrollHeight - elements\.content\.scrollTop - elements\.content\.clientHeight/);
   assert.match(popupJs, /elements\.content\.addEventListener\("scroll"/);
+  assert.match(popupJs, /maybeLoadMoreRecommendations\(\)/);
   assert.doesNotMatch(popupJs, /elements\.viewProfile\.addEventListener\("scroll"/);
 });

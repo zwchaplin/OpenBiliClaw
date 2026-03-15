@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  appendRecommendations,
   fetchActivityFeed,
   fetchProfileSummary,
   reshuffleRecommendations,
@@ -51,6 +52,28 @@ test("reshuffleRecommendations posts to reshuffle endpoint", async () => {
       },
     ],
   });
+});
+
+test("appendRecommendations posts excluded bvids to append endpoint", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return { items: [] };
+      },
+    };
+  };
+
+  const result = await appendRecommendations(["BV1A", "BV1B"]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8420/api/recommendations/append");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  assert.equal(calls[0].options.body, JSON.stringify({ excluded_bvids: ["BV1A", "BV1B"] }));
+  assert.deepEqual(result, { items: [] });
 });
 
 test("fetchActivityFeed loads popup activity summaries", async () => {
