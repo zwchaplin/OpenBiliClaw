@@ -432,10 +432,10 @@ class TestBackendAPI:
                 self,
                 *,
                 profile: object,
-                limit: int = 5,
+                limit: int = 10,
             ) -> list[object]:
                 assert profile == {"profile": "ok"}
-                assert limit == 5
+                assert limit == 10
                 from openbiliclaw.discovery.engine import DiscoveredContent
                 from openbiliclaw.recommendation.engine import Recommendation
 

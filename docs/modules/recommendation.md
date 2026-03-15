@@ -60,7 +60,7 @@ items = await engine.generate_recommendations(
 ```python
 items = await engine.reshuffle_recommendations(
     profile=profile,
-    limit=5,
+    limit=10,
 )
 ```
 
@@ -71,10 +71,11 @@ items = await engine.reshuffle_recommendations(
 - 优先按 `candidate_tier`、`relevance_score` 和最近评分时间排序
 - 同一批会优先按 `topic_key` 分桶，每个 topic 先出 1 条，再按分数回填
 - 同一批还会对 `style_key` 做软均摊，尽量避免连续塞满“硬核解析 / 游戏攻略 / 新闻快讯”中的某一类
+- 如果高分候选前排被同一 `style_key` 占满，回填阶段会放宽风格限流，优先保证整批数量尽量补到请求上限
 - 如果候选缺少 `topic_key`，才退回 `tags` 和标题/来源兜底做软限流
 - 如果候选还没有朋友式 `expression`，会优先使用按 `style_key` 润色过的快速 fallback 文案，而不是直接裸用 `relevance_reason`
 - 命中候选后会立即写入 `recommendations` 表，并把对应池子项标记为 `shown`
-- runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，保证 popup “换一批”尽量随时有货
+- runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，默认目标现在是 `150`，保证 popup 连续“换一批”时尽量随时有货
 
 ### Recommendation
 

@@ -130,6 +130,7 @@ async def test_refresh_controller_triggers_event_refresh_when_signal_threshold_r
         soul_engine=_FakeSoulEngine(),
         discovery_engine=_FakeDiscoveryEngine(),
         recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=30,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
     )
@@ -196,6 +197,7 @@ async def test_refresh_controller_skips_when_threshold_not_met() -> None:
         soul_engine=_FakeSoulEngine(),
         discovery_engine=discovery,
         recommendation_engine=recommendations,
+        pool_target_count=30,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
     )
@@ -231,6 +233,7 @@ async def test_force_refresh_runs_even_when_threshold_not_met() -> None:
         soul_engine=_FakeSoulEngine(),
         discovery_engine=discovery,
         recommendation_engine=recommendations,
+        pool_target_count=30,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
     )
@@ -270,6 +273,7 @@ async def test_refresh_controller_requests_discovery_with_backfill_limit() -> No
         soul_engine=_FakeSoulEngine(),
         discovery_engine=discovery,
         recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=30,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
     )
@@ -359,6 +363,7 @@ async def test_trigger_manual_refresh_sets_running_state() -> None:
         soul_engine=_FakeSoulEngine(),
         discovery_engine=SlowDiscovery(),
         recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=30,
         trending_refresh_hours=999,
         explore_refresh_hours=999,
     )

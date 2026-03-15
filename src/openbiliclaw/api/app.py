@@ -390,7 +390,7 @@ def create_app(
             profile = await soul_engine.get_profile()
         except Exception:
             return RecommendationReshuffleResponse(items=[])
-        items = await recommendation_engine.reshuffle_recommendations(profile=profile, limit=5)
+        items = await recommendation_engine.reshuffle_recommendations(profile=profile, limit=10)
         return RecommendationReshuffleResponse(
             items=[
                 RecommendationOut(

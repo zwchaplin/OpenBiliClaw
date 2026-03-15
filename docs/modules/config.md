@@ -101,7 +101,7 @@ cp config.example.toml config.toml
 |----|------|--------|------|
 | `enabled` | bool | `true` | 是否启用定时发现 |
 | `discovery_cron` | string | `"0 */4 * * *"` | 发现任务 cron 表达式 |
-| `pool_target_count` | int | `30` | discovery pool 期望保有的可换候选数量；运行时会持续补货直到接近该目标 |
+| `pool_target_count` | int | `150` | discovery pool 期望保有的可换候选数量；运行时会持续补货直到接近该目标，给 popup 连续“换一批”留出更充足余量 |
 | `account_sync_interval_hours` | int | `6` | 账户侧长期信号同步间隔；运行时会低频拉取 history / favorites / following |
 
 ### `[storage]`
@@ -146,6 +146,7 @@ cp config.example.toml config.toml
 - `logs/` 会持久化后端日志，便于排查服务器问题
 - 容器内运行时会把 `/app/runtime` 视为项目根目录，因此 `config-show` 中看到的路径应为 `/app/runtime/config.toml` 和 `/app/runtime/data`
 - 容器启动时会自动尝试探测 `host.docker.internal:$OPENBILICLAW_PROXY_PORT`；可达时自动注入代理，不可达时直接回退直连
+- 容器内每次执行 `openbiliclaw ...` 时也会重复这层探测，因此 `docker exec` 场景不需要额外手动补 `HTTP_PROXY`
 
 如果你修改了 `[general].data_dir` 或 `[logging].directory` 为自定义绝对路径，需要同步调整 Docker volume 的挂载目标路径。
 
@@ -174,6 +175,8 @@ cookie = ""
 - 如果缺少 provider API Key 或 B 站 Cookie，`init` 会直接在终端里引导并写回 Docker volume
 - provider 和 API Key 会写入 `/app/runtime/config.toml`
 - B 站 cookie 会写入 `/app/runtime/data/bilibili_cookie.json`
+- 首轮 `init` 和后续 `discover` 可能持续几分钟，因为它们会真实访问 B 站和当前 LLM provider
+- 当前 discover 已启用保守受控并发；默认会并发处理少量 B 站请求和 LLM 评分，但不提供额外用户配置项
 - 如不方便交互，可使用 `docker exec openbiliclaw-backend openbiliclaw auth login --cookie "..."`
 
 补充：
