@@ -28,9 +28,16 @@ class _FakeMemoryManager:
 
 
 class _FakeDatabase:
-    def __init__(self, events: list[dict[str, object]], *, pool_count: int = 30) -> None:
+    def __init__(
+        self,
+        events: list[dict[str, object]],
+        *,
+        pool_count: int = 30,
+        source_counts: dict[str, int] | None = None,
+    ) -> None:
         self.events = events
         self.pool_count = pool_count
+        self.source_counts = source_counts or {}
         self.recommendations = [
             {"id": 1, "presented": 0},
             {"id": 2, "presented": 1},
@@ -61,6 +68,9 @@ class _FakeDatabase:
 
     def count_pool_candidates(self) -> int:
         return self.pool_count
+
+    def count_pool_candidates_by_source(self) -> dict[str, int]:
+        return dict(self.source_counts)
 
 
 class _FakeSoulEngine:
@@ -381,6 +391,45 @@ async def test_refresh_controller_replenishes_until_pool_reaches_target() -> Non
     assert status["pool_target_count"] == 30
     assert status["last_replenished_count"] == 12
     assert status["recent_pool_topics"] == ["相关推荐", "站内热榜", "跨圈探索"]
+
+
+async def test_refresh_controller_prioritizes_underfilled_sources() -> None:
+    discovery = _FakeDiscoveryEngine()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [
+                {"id": 1, "event_type": "view"},
+                {"id": 2, "event_type": "search"},
+                {"id": 3, "event_type": "favorite"},
+                {"id": 4, "event_type": "comment"},
+                {"id": 5, "event_type": "feedback"},
+                {"id": 6, "event_type": "view"},
+            ],
+            pool_count=24,
+            source_counts={
+                "search": 2,
+                "related_chain": 4,
+                "trending": 0,
+                "explore": 18,
+            },
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=discovery,
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=30,
+        discovery_limit=4,
+        trending_refresh_hours=999,
+        explore_refresh_hours=999,
+    )
+
+    result = await controller.refresh_if_needed()
+
+    assert result["refreshed"] is True
+    assert discovery.calls == [
+        ({"profile": "ok"}, ["search", "related_chain"], 10),
+        ({"profile": "ok"}, ["trending"], 6),
+    ]
 
 
 async def test_trigger_manual_refresh_sets_running_state() -> None:

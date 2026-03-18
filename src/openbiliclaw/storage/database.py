@@ -415,6 +415,31 @@ class Database:
             if str(row["bvid"]).strip() and str(row["bvid"]).strip() not in viewed_bvids
         )
 
+    def count_pool_candidates_by_source(self) -> dict[str, int]:
+        """Return fresh pool counts grouped by discovery source."""
+        cursor = self.conn.execute(
+            """
+            SELECT bvid, source
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND COALESCE(feedback_type, '') != 'dislike'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM recommendations AS r
+                WHERE r.bvid = content_cache.bvid
+              )
+            """
+        )
+        viewed_bvids = self.get_recent_viewed_bvids()
+        counts: dict[str, int] = defaultdict(int)
+        for row in cursor.fetchall():
+            bvid = str(row["bvid"]).strip()
+            if not bvid or bvid in viewed_bvids:
+                continue
+            source = str(row["source"] or "").strip() or "unknown"
+            counts[source] += 1
+        return dict(counts)
+
     @staticmethod
     def _balance_pool_rows(rows: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
         if limit <= 0 or len(rows) <= limit:

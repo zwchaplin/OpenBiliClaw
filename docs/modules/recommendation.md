@@ -31,6 +31,7 @@
 | M120 来源上限与硬配比 | ✅ | `reshuffle` 现在会对 `topic_key + style_key + source` 同时加硬上限，小批次优先保留不同来源，10 条一批时单一来源最多 3 条 |
 | M121 推荐自动续页 | ✅ | popup 滚到底时现在会调用 `append` 从 discovery pool 再续 10 条，不再只能整组“换一批” |
 | M122 来源优先补齐 | ✅ | 推荐选片时会先补齐不同 `source`，再限制重复 `style`，避免 `explore` 把 `search/trending` 挤出同一批结果 |
+| M123 上游来源配额补货 | ✅ | discovery pool 低于目标值时，runtime 会先补足来源缺口，减少推荐层长期面对“explore 过满、trending 过少”的偏池子 |
 
 ## 公开 API
 
@@ -247,3 +248,4 @@ Recommendation(
 14. **快速换一批也要有说话味道**：快路径可以不等完整 `expression`，但不能直接退化成生硬说明句；当前 fallback 会按 `style_key` 生成更自然的短文案
 15. **10 条一批必须加来源硬上限**：批量变大后，单靠 topic/style 还不够；现在 `reshuffle` 会同时控制 `source`，避免整批重新被 `explore` 或 `related_chain` 吞掉
 16. **来源补齐优先于风格重复**：如果 `trending` 还没出场，就不该因为它和 `search` 同属 `light_chat` 而被挡在批次外；先让不同来源进来，再做风格均摊
+17. **下游挑得再花，也救不了偏掉的池子**：推荐层的多样性约束只能做第二道保险；真正想让一批内容更丰富，必须让 runtime 在补货时先把各来源补到合理区间

@@ -31,6 +31,7 @@
 | M119 style_key 风格标注 | ✅ | discovery 入池时会按标题/描述轻规则补 `style_key`，为推荐层的风格多样性约束提供稳定信号 |
 | M120 候选池来源交错取样 | ✅ | `get_pool_candidates()` 现在会按 `search / trending / related_chain / explore` 交错取样，避免候选窗口被单一来源刷满 |
 | M122 来源优先补齐与风格误判修正 | ✅ | 池子压缩时会优先保留不同 `source` 的候选，再限制重复 `style`；同时补强 `style_key` 规则，减少硬内容误判成 `light_chat` |
+| M123 按来源缺口补池子 | ✅ | runtime 在补货时会先统计池子里的 `search / related_chain / trending / explore` 余量，再优先补足缺口最大的来源，不再让 `explore` 长期淹没其它来源 |
 
 ## 公开 API
 
@@ -213,3 +214,4 @@ item = DiscoveredContent(
 13. **候选窗口本身也要按来源打散**：如果 `get_pool_candidates()` 的前 30 条几乎全是 `explore`，下游再怎么多样化都很难救；因此 discovery pool 读取阶段也会做来源交错取样
 14. **来源补齐优先级高于风格上限**：在 discovery 压缩时，新的 `search / trending / related_chain` 候选应优先获得一个坑位，不能先被重复的 `style_key` 卡死
 15. **`style_key` 规则宁可偏粗，也不能把硬内容全掉进 `light_chat`**：芯片、显微镜、理论、哲学这类更适合 `deep_dive`；全过程、制造过程、工艺难度更适合 `story_doc`
+16. **补货要看来源缺口，不只看池子总量**：如果池子总数够了但 `trending` 一直接近 0、`explore` 却超标，体感仍会单一；runtime refresh 现在会优先补足来源缺口，再追总量

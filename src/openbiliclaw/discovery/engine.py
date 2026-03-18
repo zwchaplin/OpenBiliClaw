@@ -601,6 +601,13 @@ class ContentDiscoveryEngine:
             "控制论",
             "混沌",
             "自组织",
+            "世界观",
+            "设定",
+            "原型",
+            "战力系统",
+            "逻辑谜题",
+            "悖论",
+            "谜题",
         )
         if any(token in text for token in game_tokens):
             return "game_strategy"

@@ -9,6 +9,12 @@ from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 _MAX_DISCOVERY_BACKFILL_PER_REFRESH = 60
+_SOURCE_TARGET_SHARES: tuple[tuple[str, int], ...] = (
+    ("search", 4),
+    ("related_chain", 4),
+    ("trending", 3),
+    ("explore", 4),
+)
 
 
 class SupportsRuntimeState(Protocol):
@@ -28,6 +34,7 @@ class SupportsEventDatabase(Protocol):
     def count_recommendations(self) -> int: ...
     def count_unread_recommendations(self) -> int: ...
     def count_pool_candidates(self) -> int: ...
+    def count_pool_candidates_by_source(self) -> dict[str, int]: ...
     def get_notification_candidate(
         self,
         *,
@@ -151,9 +158,9 @@ class ContinuousRefreshController:
 
         profile = await self.soul_engine.get_profile()
         plan = [
-            ["search", "related_chain"],
-            ["trending"],
-            ["explore"],
+            (["search", "related_chain"], self.discovery_limit),
+            (["trending"], self.discovery_limit),
+            (["explore"], self.discovery_limit),
         ]
         return await self._run_refresh_plan(
             state=state,
@@ -218,31 +225,37 @@ class ContinuousRefreshController:
             )
         )
 
-    def _build_refresh_plan(self, state: dict[str, object]) -> list[list[str]]:
+    def _build_refresh_plan(
+        self,
+        state: dict[str, object],
+    ) -> list[tuple[list[str], int]]:
         pending_events = self._pending_signal_events_count(state)
         pool_available = self.database.count_pool_candidates()
         pool_below_target = pool_available < self.pool_target_count
 
         if pool_below_target:
+            source_plan = self._build_source_replenishment_plan()
+            if source_plan:
+                return source_plan
             return [
-                ["search", "related_chain"],
-                ["trending"],
-                ["explore"],
+                (["search", "related_chain"], self.discovery_limit),
+                (["trending"], self.discovery_limit),
+                (["explore"], self.discovery_limit),
             ]
 
-        plan: list[list[str]] = []
+        plan: list[tuple[list[str], int]] = []
         if pending_events >= self.signal_event_threshold:
-            plan.append(["search", "related_chain"])
+            plan.append((["search", "related_chain"], self.discovery_limit))
         if self._is_due(
             str(state.get("last_trending_refresh_at", "")),
             hours=self.trending_refresh_hours,
         ):
-            plan.append(["trending"])
+            plan.append((["trending"], self.discovery_limit))
         if self._is_due(
             str(state.get("last_explore_refresh_at", "")),
             hours=self.explore_refresh_hours,
         ):
-            plan.append(["explore"])
+            plan.append((["explore"], self.discovery_limit))
         return plan
 
     async def refresh_after_event_ingest(self) -> dict[str, object]:
@@ -290,7 +303,7 @@ class ContinuousRefreshController:
         *,
         state: dict[str, object],
         profile: Any,
-        plan: list[list[str]],
+        plan: list[tuple[list[str], int]],
         reason: str,
     ) -> dict[str, object]:
         before_pool_count = self.database.count_pool_candidates()
@@ -308,7 +321,7 @@ class ContinuousRefreshController:
             }
         )
 
-        for strategies in plan:
+        for strategies, requested_limit in plan:
             current_pool_count = self.database.count_pool_candidates()
             if initial_pool_below_target and current_pool_count >= self.pool_target_count:
                 break
@@ -326,9 +339,10 @@ class ContinuousRefreshController:
             discovered = await self.discovery_engine.discover(
                 profile,
                 strategies=strategies,
-                limit=min(
-                    _MAX_DISCOVERY_BACKFILL_PER_REFRESH,
-                    max(self.discovery_limit, self.pool_target_count - current_pool_count),
+                limit=self._requested_refresh_limit(
+                    requested_limit=requested_limit,
+                    current_pool_count=current_pool_count,
+                    pool_below_target=initial_pool_below_target,
                 ),
             )
             all_discovered.extend(discovered)
@@ -387,6 +401,63 @@ class ContinuousRefreshController:
         if strategies == ["explore"]:
             return "再给你探一点你可能会意外喜欢的"
         return "正在继续给你补候选"
+
+    def _build_source_replenishment_plan(self) -> list[tuple[list[str], int]]:
+        source_counts = self.database.count_pool_candidates_by_source()
+        if not source_counts:
+            return []
+
+        target_counts = self._source_target_counts()
+        search_related_deficit = max(
+            0,
+            target_counts["search"] - int(source_counts.get("search", 0)),
+        ) + max(
+            0,
+            target_counts["related_chain"] - int(source_counts.get("related_chain", 0)),
+        )
+        trending_deficit = max(
+            0,
+            target_counts["trending"] - int(source_counts.get("trending", 0)),
+        )
+        explore_deficit = max(
+            0,
+            target_counts["explore"] - int(source_counts.get("explore", 0)),
+        )
+
+        plan: list[tuple[list[str], int]] = []
+        if search_related_deficit > 0:
+            plan.append((["search", "related_chain"], search_related_deficit))
+        if trending_deficit > 0:
+            plan.append((["trending"], trending_deficit))
+        if explore_deficit > 0:
+            plan.append((["explore"], explore_deficit))
+        return plan
+
+    def _source_target_counts(self) -> dict[str, int]:
+        total_share = sum(share for _, share in _SOURCE_TARGET_SHARES)
+        remaining = self.pool_target_count
+        targets: dict[str, int] = {}
+        for index, (source, share) in enumerate(_SOURCE_TARGET_SHARES):
+            if index == len(_SOURCE_TARGET_SHARES) - 1:
+                targets[source] = remaining
+                break
+            count = round(self.pool_target_count * share / total_share)
+            count = min(remaining, count)
+            targets[source] = count
+            remaining -= count
+        return targets
+
+    def _requested_refresh_limit(
+        self,
+        *,
+        requested_limit: int,
+        current_pool_count: int,
+        pool_below_target: bool,
+    ) -> int:
+        effective_limit = max(self.discovery_limit, requested_limit)
+        if pool_below_target:
+            effective_limit = max(effective_limit, self.pool_target_count - current_pool_count)
+        return min(_MAX_DISCOVERY_BACKFILL_PER_REFRESH, effective_limit)
 
     def _is_initialized(self) -> bool:
         try:
