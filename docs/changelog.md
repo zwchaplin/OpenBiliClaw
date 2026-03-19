@@ -96,6 +96,11 @@
 - `infer_style_key()` 补强了芯片/显微镜/纳米/理论/哲学等硬核解析词，以及“全过程 / 制造过程 / 工艺难度”等纪录片/工业流程词，减少大量硬内容被误判成 `light_chat`
 - 推荐候选与选中摘要日志现在更容易对应“来源是否真的被补齐”，便于继续定位池子上游偏移问题
 
+### generate 路径丰富度修正
+
+- generate_recommendations() 现在会先对缓存候选做来源均衡，再进入多样性选择，避免高分 related_chain 长时间垄断整批结果
+- 多样性回填现在改为分阶段放宽 style / source / topic 约束，只有候选真的不足时才彻底兜底补满
+
 ### 候选池按来源缺口补货
 
 - runtime refresh 在池子低于 `pool_target_count` 时，不再一视同仁地把所有策略各跑一轮，而是会先统计 `search / related_chain / trending / explore` 当前池子占比

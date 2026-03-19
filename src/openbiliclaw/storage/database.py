@@ -364,7 +364,8 @@ class Database:
             (max(limit * 5, 50),),
         )
         rows = [dict(row) for row in cursor.fetchall()]
-        return self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=limit)
+        rows = self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=len(rows))
+        return self._balance_pool_rows(rows, limit=limit)
 
     def get_pool_candidates(self, limit: int = 20) -> list[dict[str, Any]]:
         """Get fresh recommendation candidates directly from the discovery pool."""

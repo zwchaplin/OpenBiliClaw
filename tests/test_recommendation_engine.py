@@ -190,6 +190,135 @@ async def test_generate_recommendations_reads_cached_relevance_score() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_recommendations_limits_single_topic_dominance() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        discovered = [
+            *[
+                DiscoveredContent(
+                    bvid=f"RBUF{index}",
+                    title=f"同一 related 主题 {index}",
+                    source_strategy="related_chain",
+                    topic_key="related:bv1bufdz9eyb",
+                    style_key="practical_guide",
+                    relevance_score=0.95 - index * 0.001,
+                )
+                for index in range(5)
+            ],
+            *[
+                DiscoveredContent(
+                    bvid=f"RALT{index}",
+                    title=f"另一 related 主题 {index}",
+                    source_strategy="related_chain",
+                    topic_key="related:bv18xzjbbegz",
+                    style_key="light_chat",
+                    relevance_score=0.94 - index * 0.001,
+                )
+                for index in range(3)
+            ],
+            *[
+                DiscoveredContent(
+                    bvid=f"TREND{index}",
+                    title=f"热榜内容 {index}",
+                    source_strategy="trending",
+                    topic_key="trending",
+                    style_key="news_brief",
+                    relevance_score=0.84 - index * 0.001,
+                )
+                for index in range(2)
+            ],
+            *[
+                DiscoveredContent(
+                    bvid=f"SEARCH{index}",
+                    title=f"搜索内容 {index}",
+                    source_strategy="search",
+                    topic_key="ai",
+                    style_key="deep_dive",
+                    relevance_score=0.83 - index * 0.001,
+                )
+                for index in range(2)
+            ],
+        ]
+
+        recommendations = await engine.generate_recommendations(
+            discovered=discovered,
+            profile=_build_profile(),
+            limit=10,
+        )
+
+        picked_topic_keys = [item.content.topic_key for item in recommendations]
+
+        assert picked_topic_keys.count("related:bv1bufdz9eyb") <= 3
+
+
+@pytest.mark.asyncio
+async def test_generate_recommendations_balances_sources_from_cache() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        for index in range(25):
+            db.cache_content(
+                f"BVREL{index}",
+                title=f"相关链高分候选 {index}",
+                up_name="相关频道",
+                source="related_chain",
+                relevance_score=0.99 - index * 0.001,
+                relevance_reason="related high score",
+                style_key="practical_guide",
+                topic_key=f"related:topic:{index % 6}",
+            )
+        for index in range(5):
+            db.cache_content(
+                f"BVTREND{index}",
+                title=f"热榜候选 {index}",
+                up_name="热榜频道",
+                source="trending",
+                relevance_score=0.89 - index * 0.001,
+                relevance_reason="trending candidate",
+                style_key="news_brief",
+                topic_key=f"trending:{index}",
+            )
+        for index in range(5):
+            db.cache_content(
+                f"BVSEARCH{index}",
+                title=f"搜索候选 {index}",
+                up_name="搜索频道",
+                source="search",
+                relevance_score=0.88 - index * 0.001,
+                relevance_reason="search candidate",
+                style_key="deep_dive",
+                topic_key=f"search:{index}",
+            )
+        for index in range(5):
+            db.cache_content(
+                f"BVEXP{index}",
+                title=f"探索候选 {index}",
+                up_name="探索频道",
+                source="explore",
+                relevance_score=0.87 - index * 0.001,
+                relevance_reason="explore candidate",
+                style_key="story_doc",
+                topic_key=f"explore:{index}",
+            )
+
+        recommendations = await engine.generate_recommendations(
+            discovered=None,
+            profile=_build_profile(),
+            limit=10,
+        )
+
+        picked_sources = {item.content.source_strategy for item in recommendations}
+
+        assert "explore" in picked_sources
+        assert "search" in picked_sources
+
+
+@pytest.mark.asyncio
 async def test_generate_recommendations_does_not_repeat_history() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")

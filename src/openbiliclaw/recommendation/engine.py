@@ -406,6 +406,7 @@ class RecommendationEngine:
             return ranked[:limit]
 
         per_topic_cap = cls._topic_cap(limit)
+        soft_topic_cap = cls._soft_topic_cap(limit)
         per_style_cap = cls._style_cap(limit)
         selected: list[DiscoveredContent] = []
         deferred: list[DiscoveredContent] = []
@@ -461,29 +462,73 @@ class RecommendationEngine:
             if len(selected) >= limit:
                 return selected
 
-        remaining: list[DiscoveredContent] = []
-        for item in deferred:
-            tokens = cls._diversity_tokens(item)
-            style_token = cls._style_token(item)
-            source_token = cls._normalize_topic_token(item.source_strategy)
-            if tokens and any(topic_counts.get(token, 0) >= per_topic_cap for token in tokens):
-                remaining.append(item)
-                continue
-            if style_token and style_counts.get(style_token, 0) >= per_style_cap:
-                remaining.append(item)
-                continue
-            if source_token and source_counts.get(source_token, 0) >= per_source_cap:
-                remaining.append(item)
-                continue
-            selected.append(item)
-            for token in tokens:
-                topic_counts[token] = topic_counts.get(token, 0) + 1
-            if style_token:
-                style_counts[style_token] = style_counts.get(style_token, 0) + 1
-            if source_token:
-                source_counts[source_token] = source_counts.get(source_token, 0) + 1
-            if len(selected) >= limit:
-                break
+        def try_fill(
+            pool: list[DiscoveredContent],
+            *,
+            topic_cap: int,
+            enforce_style_cap: bool,
+            enforce_source_cap: bool,
+        ) -> list[DiscoveredContent]:
+            remaining: list[DiscoveredContent] = []
+            for item in pool:
+                tokens = cls._diversity_tokens(item)
+                style_token = cls._style_token(item)
+                source_token = cls._normalize_topic_token(item.source_strategy)
+                if tokens and any(topic_counts.get(token, 0) >= topic_cap for token in tokens):
+                    remaining.append(item)
+                    continue
+                if (
+                    enforce_style_cap
+                    and style_token
+                    and style_counts.get(style_token, 0) >= per_style_cap
+                ):
+                    remaining.append(item)
+                    continue
+                if (
+                    enforce_source_cap
+                    and source_token
+                    and source_counts.get(source_token, 0) >= per_source_cap
+                ):
+                    remaining.append(item)
+                    continue
+                selected.append(item)
+                for token in tokens:
+                    topic_counts[token] = topic_counts.get(token, 0) + 1
+                if style_token:
+                    style_counts[style_token] = style_counts.get(style_token, 0) + 1
+                if source_token:
+                    source_counts[source_token] = source_counts.get(source_token, 0) + 1
+                if len(selected) >= limit:
+                    return []
+            return remaining
+
+        remaining = try_fill(
+            deferred,
+            topic_cap=per_topic_cap,
+            enforce_style_cap=True,
+            enforce_source_cap=True,
+        )
+        if len(selected) < limit:
+            remaining = try_fill(
+                remaining,
+                topic_cap=per_topic_cap,
+                enforce_style_cap=False,
+                enforce_source_cap=True,
+            )
+        if len(selected) < limit:
+            remaining = try_fill(
+                remaining,
+                topic_cap=per_topic_cap,
+                enforce_style_cap=False,
+                enforce_source_cap=False,
+            )
+        if len(selected) < limit:
+            remaining = try_fill(
+                remaining,
+                topic_cap=soft_topic_cap,
+                enforce_style_cap=False,
+                enforce_source_cap=False,
+            )
         if len(selected) < limit:
             for item in remaining:
                 selected.append(item)
@@ -529,6 +574,10 @@ class RecommendationEngine:
     @staticmethod
     def _topic_cap(limit: int) -> int:
         return 1 if limit <= 5 else 2
+
+    @staticmethod
+    def _soft_topic_cap(limit: int) -> int:
+        return 2 if limit <= 5 else 3
 
     @staticmethod
     def _style_cap(limit: int) -> int:
