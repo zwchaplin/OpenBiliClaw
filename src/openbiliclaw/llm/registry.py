@@ -76,6 +76,32 @@ def build_llm_registry(
     return registry
 
 
+def build_embedding_service(
+    config: Config,
+    registry: LLMRegistry,
+) -> object | None:
+    """Build an EmbeddingService from config, or None if unavailable.
+
+    Uses ``[llm.embedding]`` config section for model and threshold.
+    Falls back to the Gemini provider from the registry.
+    """
+    try:
+        from openbiliclaw.llm.embedding import EmbeddingService
+
+        emb_cfg = config.llm.embedding
+        provider_name = emb_cfg.provider.strip() or config.llm.default_provider
+        provider = registry.get(provider_name)
+        if not hasattr(provider, "embed"):
+            return None
+        return EmbeddingService(
+            provider,
+            model=emb_cfg.model or "text-embedding-004",
+            similarity_threshold=emb_cfg.similarity_threshold,
+        )
+    except Exception:
+        return None
+
+
 def summarize_registry(config: Config, registry: LLMRegistry) -> RegistrySummary:
     """Return registry summary details for CLI display."""
     return RegistrySummary(

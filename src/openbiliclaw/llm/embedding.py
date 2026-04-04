@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class SupportsEmbed(Protocol):
     """Protocol for providers that support text embedding."""
 
-    async def embed(self, text: str) -> list[float]: ...
+    async def embed(self, text: str, *, model: str = ...) -> list[float]: ...
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -40,16 +40,21 @@ class EmbeddingService:
     - In-memory LRU-style cache (keyed by normalized text)
     - Batch embedding with concurrency control
     - Semantic similarity comparison with configurable threshold
+
+    All parameters (model, threshold, cache_size) can be configured
+    via ``[llm.embedding]`` in config.toml.
     """
 
     def __init__(
         self,
         provider: SupportsEmbed,
         *,
+        model: str = "text-embedding-004",
         cache_size: int = 500,
         similarity_threshold: float = 0.82,
     ) -> None:
         self._provider = provider
+        self._model = model
         self._cache: dict[str, list[float]] = {}
         self._cache_size = cache_size
         self.similarity_threshold = similarity_threshold
@@ -63,7 +68,7 @@ class EmbeddingService:
         if cached is not None:
             return cached
         try:
-            vector = await self._provider.embed(key)
+            vector = await self._provider.embed(key, model=self._model)
         except Exception:
             logger.warning("Embedding failed for: %s", key[:50], exc_info=True)
             return []

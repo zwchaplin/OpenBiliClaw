@@ -62,8 +62,25 @@ class LLMProviderConfig:
 
 
 @dataclass
+class EmbeddingConfig:
+    """Embedding model configuration."""
+
+    provider: str = ""  # Empty = use LLM default_provider
+    model: str = "text-embedding-004"
+    similarity_threshold: float = 0.82
+
+
+@dataclass
+class ModuleLLMConfig:
+    """Per-module LLM override. Empty strings = use global defaults."""
+
+    provider: str = ""
+    model: str = ""
+
+
+@dataclass
 class LLMConfig:
-    """LLM configuration."""
+    """LLM configuration with global defaults and per-module overrides."""
 
     default_provider: str = "openai"
     openai: LLMProviderConfig = field(default_factory=LLMProviderConfig)
@@ -72,6 +89,12 @@ class LLMConfig:
     deepseek: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     ollama: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     openrouter: LLMProviderConfig = field(default_factory=LLMProviderConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    # Per-module overrides (empty = use global default)
+    soul: ModuleLLMConfig = field(default_factory=ModuleLLMConfig)
+    discovery: ModuleLLMConfig = field(default_factory=ModuleLLMConfig)
+    recommendation: ModuleLLMConfig = field(default_factory=ModuleLLMConfig)
+    evaluation: ModuleLLMConfig = field(default_factory=ModuleLLMConfig)
 
 
 def _gemini_api_key_from_env() -> str:
@@ -253,6 +276,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     store_raw = raw.get("storage", {})
     logging_raw = raw.get("logging", {})
 
+    embedding_raw = llm_raw.get("embedding", {})
     llm = LLMConfig(
         default_provider=llm_raw.get("default_provider", "openai"),
         openai=LLMProviderConfig(**llm_raw.get("openai", {})),
@@ -261,6 +285,26 @@ def _build_config(raw: dict[str, Any]) -> Config:
         deepseek=LLMProviderConfig(**llm_raw.get("deepseek", {})),
         ollama=LLMProviderConfig(**llm_raw.get("ollama", {})),
         openrouter=LLMProviderConfig(**llm_raw.get("openrouter", {})),
+        embedding=EmbeddingConfig(**{
+            k: v for k, v in embedding_raw.items()
+            if k in ("provider", "model", "similarity_threshold")
+        }),
+        soul=ModuleLLMConfig(**{
+            k: v for k, v in llm_raw.get("soul", {}).items()
+            if k in ("provider", "model")
+        }),
+        discovery=ModuleLLMConfig(**{
+            k: v for k, v in llm_raw.get("discovery", {}).items()
+            if k in ("provider", "model")
+        }),
+        recommendation=ModuleLLMConfig(**{
+            k: v for k, v in llm_raw.get("recommendation", {}).items()
+            if k in ("provider", "model")
+        }),
+        evaluation=ModuleLLMConfig(**{
+            k: v for k, v in llm_raw.get("evaluation", {}).items()
+            if k in ("provider", "model")
+        }),
     )
 
     browser_raw = bili_raw.pop("browser", {})
@@ -421,6 +465,30 @@ def _render_config_toml(config: Config) -> str:
     lines.extend(_render_provider_section("deepseek", config.llm.deepseek))
     lines.extend(_render_provider_section("ollama", config.llm.ollama))
     lines.extend(_render_provider_section("openrouter", config.llm.openrouter))
+    lines.extend([
+        "[llm.embedding]",
+        f'provider = {_toml_string(config.llm.embedding.provider)}',
+        f'model = {_toml_string(config.llm.embedding.model)}',
+        f"similarity_threshold = {config.llm.embedding.similarity_threshold}",
+        "",
+        "# Per-module LLM overrides (empty = use global default)",
+        "[llm.soul]",
+        f'provider = {_toml_string(config.llm.soul.provider)}',
+        f'model = {_toml_string(config.llm.soul.model)}',
+        "",
+        "[llm.discovery]",
+        f'provider = {_toml_string(config.llm.discovery.provider)}',
+        f'model = {_toml_string(config.llm.discovery.model)}',
+        "",
+        "[llm.recommendation]",
+        f'provider = {_toml_string(config.llm.recommendation.provider)}',
+        f'model = {_toml_string(config.llm.recommendation.model)}',
+        "",
+        "[llm.evaluation]",
+        f'provider = {_toml_string(config.llm.evaluation.provider)}',
+        f'model = {_toml_string(config.llm.evaluation.model)}',
+        "",
+    ])
     lines.extend(
         [
             "[bilibili]",

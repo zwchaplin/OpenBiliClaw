@@ -143,15 +143,20 @@ class GeminiProvider(LLMProvider):
             return False
         return isinstance(exc, (LLMProviderError, LLMTimeoutError))
 
-    async def embed(self, text: str) -> list[float]:
+    async def embed(self, text: str, *, model: str = "text-embedding-004") -> list[float]:
         """Get text embedding using Gemini's embedding model.
 
-        Returns a 768-dimensional vector for semantic similarity.
+        Args:
+            text: Text to embed.
+            model: Embedding model name (default: text-embedding-004).
+
+        Returns:
+            Embedding vector (768-dim for text-embedding-004).
         """
         if types is None:
             _raise_missing_sdk()
         response = await self._client.aio.models.embed_content(
-            model="text-embedding-004",
+            model=model,
             contents=text,
             config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY"),
         )

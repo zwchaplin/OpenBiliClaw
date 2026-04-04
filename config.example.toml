@@ -51,6 +51,39 @@ base_url = "https://openrouter.ai/api/v1"
 http_referer = ""
 x_title = "OpenBiliClaw"
 
+[llm.embedding]
+# Embedding model for semantic similarity (topic dedup, fatigue, feedback)
+# provider: empty = use default_provider; model: Gemini text-embedding-004 recommended
+provider = ""
+model = "text-embedding-004"
+# Cosine similarity threshold: topics above this are considered "same topic"
+similarity_threshold = 0.82
+
+# Per-module LLM overrides — set provider/model to use a different LLM
+# for specific modules. Leave empty to inherit from [llm] defaults.
+# This lets you e.g. use a cheaper model for discovery evaluation
+# but a smarter model for soul profile generation.
+
+[llm.soul]
+# Soul profile generation / incremental updates (init, role/values/core delta)
+provider = ""
+model = ""
+
+[llm.discovery]
+# Content discovery (search query generation, domain exploration)
+provider = ""
+model = ""
+
+[llm.recommendation]
+# Recommendation expression generation
+provider = ""
+model = ""
+
+[llm.evaluation]
+# Content relevance evaluation (LLM-as-judge for discovered content)
+provider = ""
+model = ""
+
 [bilibili]
 # Authentication method: "cookie" | "qrcode" | "none"
 # 仅允许以上取值；非法值会在运行态校验时报错。

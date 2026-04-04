@@ -202,23 +202,17 @@ def _build_soul_engine() -> Any:
 
 def _build_recommendation_engine() -> Any:
     """Build the recommendation engine with core-memory-aware LLM access."""
+    from openbiliclaw.config import load_config
     from openbiliclaw.llm.service import LLMService
     from openbiliclaw.recommendation.engine import RecommendationEngine
 
     memory = _build_memory_manager()
     database = _get_runtime_database()
+    cfg = load_config()
     registry = _build_registry()
     llm_service = LLMService(registry=registry, memory=memory)
-    # Build embedding service for semantic dedup (optional)
-    _emb = None
-    try:
-        from openbiliclaw.llm.embedding import EmbeddingService
-        from openbiliclaw.llm.gemini_provider import GeminiProvider
-        _g = registry.get("gemini")
-        if isinstance(_g, GeminiProvider):
-            _emb = EmbeddingService(_g)
-    except Exception:
-        pass
+    from openbiliclaw.llm.registry import build_embedding_service
+    _emb = build_embedding_service(cfg, registry)
     return RecommendationEngine(llm=llm_service, database=database, embedding_service=_emb)
 
 
@@ -277,17 +271,11 @@ def _build_discovery_engine() -> Any:
         llm_evaluation_concurrency=2,
     )
 
-    # Build embedding service for semantic topic dedup (optional)
-    embedding_service = None
-    try:
-        from openbiliclaw.llm.embedding import EmbeddingService
-        from openbiliclaw.llm.gemini_provider import GeminiProvider
-        registry = _build_registry()
-        gemini = registry.get("gemini")
-        if isinstance(gemini, GeminiProvider):
-            embedding_service = EmbeddingService(gemini)
-    except Exception:
-        pass  # Embedding is optional; falls back to exact string dedup
+    # Build embedding service from config (optional)
+    from openbiliclaw.config import load_config
+    from openbiliclaw.llm.registry import build_embedding_service
+    cfg = load_config()
+    embedding_service = build_embedding_service(cfg, _build_registry())
 
     engine = ContentDiscoveryEngine(
         llm_service=llm_service,
