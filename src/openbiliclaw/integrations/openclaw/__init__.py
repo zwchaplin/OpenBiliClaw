@@ -13,6 +13,8 @@ from .errors import (
 )
 from .operations import OpenClawAdapter
 from .schemas import (
+    DelightItem,
+    DelightResponse,
     FeedbackRequest,
     FeedbackResponse,
     ProfileResponse,
@@ -30,6 +32,8 @@ __all__ = [
     "build_openclaw_adapter",
     "build_openclaw_adapter_services",
     "build_openclaw_skills",
+    "DelightItem",
+    "DelightResponse",
     "FeedbackRequest",
     "FeedbackResponse",
     "OpenClawAdapter",

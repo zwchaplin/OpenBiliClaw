@@ -7,6 +7,8 @@ from pathlib import Path
 
 from openbiliclaw.integrations.openclaw.errors import AdapterValidationError
 from openbiliclaw.integrations.openclaw.schemas import (
+    DelightItem,
+    DelightResponse,
     FeedbackResponse,
     ProfileResponse,
     RecommendationItem,
@@ -64,6 +66,19 @@ class _FakeCliAdapter:
             ok=True,
             recommendation_id=request.recommendation_id,
             feedback_type=request.feedback_type,
+        )
+
+    async def get_delight(self) -> DelightResponse:
+        self.calls.append(("get_delight",))
+        return DelightResponse(
+            item=DelightItem(
+                bvid="BV1CLIDELIGHT",
+                title="意外的跨域发现",
+                delight_reason="这条会戳到你一直想搞明白的那个方向。",
+                delight_score=0.91,
+                delight_hook="跨域惊喜",
+                cover_url="https://example.com/delight.jpg",
+            ),
         )
 
     async def get_runtime_status(self) -> RuntimeStatusResponse:
@@ -183,12 +198,13 @@ def test_doctor_cli_reports_skill_pack_and_registered_skill_names(capsys) -> Non
                 "skills/openbiliclaw-adapter/SKILL.md"
             ),
             "skill_pack_exists": True,
-            "skill_count": 5,
+            "skill_count": 6,
             "skill_names": [
                 "openbiliclaw_sync_account",
                 "openbiliclaw_get_profile",
                 "openbiliclaw_recommend",
                 "openbiliclaw_submit_feedback",
+                "openbiliclaw_get_delight",
                 "openbiliclaw_get_runtime_status",
             ],
             "cli_module": "openbiliclaw.integrations.openclaw.cli",
@@ -214,6 +230,49 @@ def test_emit_skill_descriptors_cli_outputs_serializable_descriptors(capsys) -> 
     assert adapter.calls == []
 
 
+def test_get_delight_cli_emits_json_and_returns_zero(capsys) -> None:
+    from openbiliclaw.integrations.openclaw.cli import main
+
+    adapter = _FakeCliAdapter()
+
+    exit_code = main(["get-delight"], adapter=adapter)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["ok"] is True
+    assert payload["data"]["item"]["bvid"] == "BV1CLIDELIGHT"
+    assert payload["data"]["item"]["delight_hook"] == "跨域惊喜"
+    assert payload["data"]["item"]["delight_score"] == 0.91
+    assert adapter.calls == [("get_delight",)]
+
+
+def test_listen_parser_accepts_default_flags() -> None:
+    from openbiliclaw.integrations.openclaw.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args(["listen"])
+
+    assert args.command == "listen"
+    assert args.ws_url == "ws://127.0.0.1:8420/api/runtime-stream"
+    assert "delight.candidate" in args.events
+
+
+def test_listen_parser_accepts_custom_flags() -> None:
+    from openbiliclaw.integrations.openclaw.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args([
+        "listen",
+        "--ws-url", "ws://custom:9999/api/runtime-stream",
+        "--events", "delight.candidate,refresh.pool_updated",
+    ])
+
+    assert args.ws_url == "ws://custom:9999/api/runtime-stream"
+    assert "delight.candidate" in args.events
+    assert "refresh.pool_updated" in args.events
+
+
 def test_workspace_skill_pack_exists_and_mentions_cli_bridge() -> None:
     skill_path = Path("/Users/white/workspace/OpenBiliClaw/skills/openbiliclaw-adapter/SKILL.md")
 
@@ -222,3 +281,5 @@ def test_workspace_skill_pack_exists_and_mentions_cli_bridge() -> None:
     assert "name: openbiliclaw_adapter" in content
     assert "uv run python -m openbiliclaw.integrations.openclaw.cli" in content
     assert "recommend --limit" in content
+    assert "get-delight" in content
+    assert "listen" in content

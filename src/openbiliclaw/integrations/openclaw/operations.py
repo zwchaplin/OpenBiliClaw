@@ -9,6 +9,8 @@ from typing import Any, Protocol
 
 from .errors import AdapterOperationError
 from .schemas import (
+    DelightItem,
+    DelightResponse,
     FeedbackRequest,
     FeedbackResponse,
     ProfileResponse,
@@ -229,6 +231,32 @@ class OpenClawAdapter:
             recommendation_id=request.recommendation_id,
             feedback_type=request.feedback_type,
         )
+
+    async def get_delight(self) -> DelightResponse:
+        """Return the current best proactive delight candidate, if any."""
+        try:
+            get_pending_delight = getattr(
+                self.services.runtime_controller,
+                "get_pending_delight",
+                None,
+            )
+            if not callable(get_pending_delight):
+                return DelightResponse(item=None)
+            candidate = get_pending_delight()
+            if candidate is None:
+                return DelightResponse(item=None)
+            return DelightResponse(
+                item=DelightItem(
+                    bvid=str(candidate.get("bvid", "")),
+                    title=str(candidate.get("title", "")),
+                    delight_reason=str(candidate.get("delight_reason", "")),
+                    delight_score=self._to_float(candidate.get("delight_score", 0.0)),
+                    delight_hook=str(candidate.get("delight_hook", "")),
+                    cover_url=str(candidate.get("cover_url", "")),
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            raise AdapterOperationError("Failed to get delight candidate.") from exc
 
     async def get_runtime_status(self) -> RuntimeStatusResponse:
         """Return the merged runtime and account sync summary."""

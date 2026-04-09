@@ -22,6 +22,11 @@ _SKILL_PACK_PATH = (
     Path(__file__).resolve().parents[4] / "skills" / "openbiliclaw-adapter" / "SKILL.md"
 )
 
+_RUNTIME_STREAM_URL = "ws://127.0.0.1:8420/api/runtime-stream"
+
+# Event types that the ``listen`` command forwards to stdout.
+_LISTEN_EVENT_TYPES = frozenset({"delight.candidate"})
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="openbiliclaw-openclaw")
@@ -29,9 +34,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("sync-account")
     subparsers.add_parser("get-profile")
+    subparsers.add_parser("get-delight")
     subparsers.add_parser("runtime-status")
     subparsers.add_parser("doctor")
     subparsers.add_parser("emit-skill-descriptors")
+
+    listen_parser = subparsers.add_parser(
+        "listen",
+        help="Stream proactive events (delight.candidate) via WebSocket as JSON lines.",
+    )
+    listen_parser.add_argument(
+        "--ws-url",
+        default=_RUNTIME_STREAM_URL,
+        help="WebSocket URL for the runtime stream.",
+    )
+    listen_parser.add_argument(
+        "--events",
+        default=",".join(sorted(_LISTEN_EVENT_TYPES)),
+        help="Comma-separated event types to forward (default: delight.candidate).",
+    )
 
     recommend_parser = subparsers.add_parser("recommend")
     recommend_parser.add_argument("--limit", type=int, default=5)
@@ -91,6 +112,8 @@ async def _run_command(args: argparse.Namespace, adapter: Any) -> dict[str, obje
             result = await adapter.sync_account()
         elif args.command == "get-profile":
             result = await adapter.get_profile()
+        elif args.command == "get-delight":
+            result = await adapter.get_delight()
         elif args.command == "runtime-status":
             result = await adapter.get_runtime_status()
         elif args.command == "recommend":
@@ -125,10 +148,117 @@ async def _run_command(args: argparse.Namespace, adapter: Any) -> dict[str, obje
     }
 
 
+# ---------------------------------------------------------------------------
+# ``listen`` — long-running WebSocket event stream
+# ---------------------------------------------------------------------------
+
+_WS_RECONNECT_DELAY = 3.0
+_DELIGHT_ACK_URL = "http://127.0.0.1:8420/api/delight/sent"
+
+
+async def _acknowledge_delight(bvid: str) -> None:
+    """POST acknowledgment so the backend marks the item as notified."""
+    try:
+        import aiohttp  # type: ignore[import-untyped]
+
+        async with aiohttp.ClientSession() as session, session.post(
+            _DELIGHT_ACK_URL,
+            json={"bvid": bvid},
+        ) as resp:
+            resp.raise_for_status()
+    except Exception:
+        # Fallback to synchronous urllib when aiohttp is unavailable
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                _DELIGHT_ACK_URL,
+                data=json.dumps({"bvid": bvid}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)  # noqa: S310
+        except Exception:
+            pass
+
+
+async def _listen_ws(ws_url: str, event_types: frozenset[str]) -> None:
+    """Connect to the runtime WebSocket stream and forward matching events.
+
+    Each matching event is written to stdout as a single JSON line:
+
+        {"type": "delight.candidate", "bvid": "BV1xxx", ...}
+
+    The connection auto-reconnects on failure. Press Ctrl-C to stop.
+    """
+    try:
+        import websockets  # type: ignore[import-untyped]
+    except ModuleNotFoundError:
+        _print_payload({
+            "ok": False,
+            "error": (
+                "The 'listen' command requires the 'websockets' package. "
+                "Install it with:  pip install websockets"
+            ),
+            "error_type": "dependency_error",
+        })
+        return
+
+    while True:
+        try:
+            async with websockets.connect(ws_url) as ws:
+                _print_payload({
+                    "ok": True,
+                    "data": {
+                        "status": "connected",
+                        "ws_url": ws_url,
+                        "event_types": sorted(event_types),
+                    },
+                })
+                sys.stdout.flush()
+                async for raw_message in ws:
+                    try:
+                        event = json.loads(raw_message)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    event_type = str(event.get("type", ""))
+                    if event_type not in event_types:
+                        continue
+                    _print_payload({"ok": True, "data": event})
+                    sys.stdout.flush()
+                    # Auto-ACK delight candidates so cooldown starts immediately
+                    if event_type == "delight.candidate":
+                        bvid = str(event.get("bvid", ""))
+                        if bvid:
+                            await _acknowledge_delight(bvid)
+        except (OSError, Exception):
+            _print_payload({
+                "ok": False,
+                "error": "WebSocket disconnected, reconnecting...",
+                "error_type": "connection_error",
+            })
+            sys.stdout.flush()
+            await asyncio.sleep(_WS_RECONNECT_DELAY)
+
+
 def main(argv: Sequence[str] | None = None, *, adapter: Any | None = None) -> int:
     """Run the OpenClaw adapter CLI and print JSON output."""
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    # ``listen`` is a long-running stream — handle separately
+    if args.command == "listen":
+        event_types = frozenset(
+            t.strip() for t in args.events.split(",") if t.strip()
+        ) or _LISTEN_EVENT_TYPES
+        try:
+            asyncio.run(_listen_ws(args.ws_url, event_types))
+        except KeyboardInterrupt:
+            pass
+        return 0
+
     if adapter is not None:
         resolved_adapter = adapter
     elif args.command in {"doctor", "emit-skill-descriptors"}:

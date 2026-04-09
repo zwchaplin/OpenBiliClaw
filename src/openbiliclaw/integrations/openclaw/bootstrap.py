@@ -82,6 +82,7 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
     concurrency = DiscoveryConcurrencyController(
         bilibili_request_concurrency=4,
         llm_evaluation_concurrency=4,
+        search_budget_total=30,
     )
 
     discovery_engine = ContentDiscoveryEngine(

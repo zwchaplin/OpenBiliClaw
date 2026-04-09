@@ -11,6 +11,8 @@ from openbiliclaw.integrations.openclaw.errors import (
     AdapterValidationError,
 )
 from openbiliclaw.integrations.openclaw.schemas import (
+    DelightItem,
+    DelightResponse,
     FeedbackResponse,
     ProfileResponse,
     RecommendationItem,
@@ -74,6 +76,19 @@ class _FakeAdapter:
             feedback_type=request.feedback_type,
         )
 
+    async def get_delight(self) -> DelightResponse:
+        self.calls.append(("get_delight",))
+        return DelightResponse(
+            item=DelightItem(
+                bvid="BV1DELIGHT",
+                title="跨域探索的意外发现",
+                delight_reason="你之前聊到过想搞明白复杂系统，这条从完全不同的角度切入了。",
+                delight_score=0.92,
+                delight_hook="深层共鸣",
+                cover_url="https://example.com/delight-cover.jpg",
+            ),
+        )
+
     async def get_runtime_status(self) -> RuntimeStatusResponse:
         self.calls.append(("get_runtime_status",))
         return RuntimeStatusResponse(
@@ -99,6 +114,7 @@ def test_build_openclaw_skills_returns_expected_names() -> None:
         "openbiliclaw_get_profile",
         "openbiliclaw_recommend",
         "openbiliclaw_submit_feedback",
+        "openbiliclaw_get_delight",
         "openbiliclaw_get_runtime_status",
     ]
 
@@ -218,3 +234,18 @@ async def test_skill_returns_operation_error_payload() -> None:
         "error": "profile unavailable",
         "error_type": "operation_error",
     }
+
+
+@pytest.mark.asyncio
+async def test_get_delight_skill_delegates_to_adapter() -> None:
+    adapter = _FakeAdapter()
+    skills = build_openclaw_skills(adapter)
+    skill = next(item for item in skills if item.name == "openbiliclaw_get_delight")
+
+    payload = await skill.handler({})
+
+    assert payload["ok"] is True
+    assert payload["data"]["item"]["bvid"] == "BV1DELIGHT"
+    assert payload["data"]["item"]["delight_hook"] == "深层共鸣"
+    assert payload["data"]["item"]["delight_score"] == 0.92
+    assert adapter.calls == [("get_delight",)]

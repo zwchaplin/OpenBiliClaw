@@ -92,3 +92,22 @@ class SyncAccountResponse:
     synced: bool
     new_event_count: int
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DelightItem:
+    """One proactive delight recommendation exposed to OpenClaw."""
+
+    bvid: str
+    title: str = ""
+    delight_reason: str = ""
+    delight_score: float = 0.0
+    delight_hook: str = ""
+    cover_url: str = ""
+
+
+@dataclass(slots=True)
+class DelightResponse:
+    """Proactive delight recommendation result returned to OpenClaw."""
+
+    item: DelightItem | None = None

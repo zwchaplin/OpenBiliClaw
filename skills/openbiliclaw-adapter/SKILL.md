@@ -65,10 +65,33 @@ Supported commands:
 
 - `sync-account`
 - `get-profile`
+- `get-delight` — check for a proactive surprise recommendation
 - `runtime-status`
 - `recommend --limit 5`
 - `recommend --limit 5 --refresh-if-needed`
 - `submit-feedback --recommendation-id 7 --feedback-type like --note "很对胃口"`
+- `listen` — long-running WebSocket stream for real-time delight push (see below)
+
+## Proactive Delight Push (WebSocket)
+
+Instead of polling `get-delight`, OpenClaw can receive real-time push notifications via WebSocket:
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli listen
+```
+
+This connects to the runtime stream and outputs one JSON line per event:
+
+```json
+{"ok": true, "data": {"status": "connected", "ws_url": "ws://127.0.0.1:8420/api/runtime-stream", "event_types": ["delight.candidate"]}}
+{"ok": true, "data": {"type": "delight.candidate", "bvid": "BV1xxx", "title": "...", "delight_reason": "...", "delight_score": 0.92, "delight_hook": "深层共鸣"}}
+```
+
+The command auto-reconnects on disconnection. Press Ctrl-C to stop.
+
+Options:
+- `--ws-url <url>` — override the WebSocket endpoint
+- `--events <types>` — comma-separated event types to listen for (default: `delight.candidate`)
 
 ## Daily Loop
 
@@ -78,7 +101,8 @@ Use this order for routine work:
 2. `recommend --limit <n>`
 3. `submit-feedback`
 4. `runtime-status`
-5. `sync-account` when long-term signals need refreshing
+5. `get-delight` or `listen` for proactive surprise recommendations
+6. `sync-account` when long-term signals need refreshing
 
 ## Working Rules
 
@@ -107,4 +131,12 @@ uv run python -m openbiliclaw.integrations.openclaw.cli submit-feedback \
   --recommendation-id 12 \
   --feedback-type comment \
   --note "方向对，但我想看更深一点。"
+```
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli get-delight
+```
+
+```bash
+uv run python -m openbiliclaw.integrations.openclaw.cli listen
 ```

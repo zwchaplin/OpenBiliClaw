@@ -90,6 +90,10 @@ def build_openclaw_skills(adapter: Any) -> list[OpenClawSkillDescriptor]:
 
         return await _run_handler(action)
 
+    async def get_delight_handler(payload: dict[str, object]) -> dict[str, object]:
+        del payload
+        return await _run_handler(adapter.get_delight)
+
     async def get_runtime_status_handler(payload: dict[str, object]) -> dict[str, object]:
         del payload
         return await _run_handler(adapter.get_runtime_status)
@@ -132,6 +136,12 @@ def build_openclaw_skills(adapter: Any) -> list[OpenClawSkillDescriptor]:
                 "required": ["recommendation_id", "feedback_type"],
             },
             handler=submit_feedback_handler,
+        ),
+        OpenClawSkillDescriptor(
+            name="openbiliclaw_get_delight",
+            description="Get a proactive surprise recommendation that might delight the user.",
+            input_schema={"type": "object", "properties": {}},
+            handler=get_delight_handler,
         ),
         OpenClawSkillDescriptor(
             name="openbiliclaw_get_runtime_status",

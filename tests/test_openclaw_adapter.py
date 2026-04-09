@@ -18,6 +18,8 @@ from openbiliclaw.integrations.openclaw.bootstrap import (
 from openbiliclaw.integrations.openclaw.errors import AdapterValidationError
 from openbiliclaw.integrations.openclaw.operations import OpenClawAdapter
 from openbiliclaw.integrations.openclaw.schemas import (
+    DelightItem,
+    DelightResponse,
     FeedbackRequest,
     ProfileResponse,
     RecommendationItem,
@@ -115,6 +117,36 @@ def test_sync_account_response_serializes_summary() -> None:
         "new_event_count": 12,
         "errors": ["timeout"],
     }
+
+
+def test_delight_response_serializes_with_item() -> None:
+    payload = DelightResponse(
+        item=DelightItem(
+            bvid="BV1DELIGHT",
+            title="跨域发现",
+            delight_reason="你之前聊到过想搞明白复杂系统。",
+            delight_score=0.92,
+            delight_hook="深层共鸣",
+            cover_url="https://example.com/cover.jpg",
+        ),
+    )
+
+    assert asdict(payload) == {
+        "item": {
+            "bvid": "BV1DELIGHT",
+            "title": "跨域发现",
+            "delight_reason": "你之前聊到过想搞明白复杂系统。",
+            "delight_score": 0.92,
+            "delight_hook": "深层共鸣",
+            "cover_url": "https://example.com/cover.jpg",
+        },
+    }
+
+
+def test_delight_response_serializes_without_item() -> None:
+    payload = DelightResponse(item=None)
+
+    assert asdict(payload) == {"item": None}
 
 
 def test_feedback_request_rejects_unsupported_feedback_type() -> None:
@@ -218,6 +250,14 @@ class _FakeRuntimeController:
     def __init__(self) -> None:
         self.refresh_if_needed_calls = 0
         self.refresh_after_feedback_calls = 0
+        self.delight_candidate: dict[str, object] | None = {
+            "bvid": "BV1DLRT",
+            "title": "跨域惊喜视频",
+            "delight_reason": "这条会戳到你一直想搞明白的那个方向。",
+            "delight_score": 0.93,
+            "delight_hook": "跨域惊喜",
+            "cover_url": "https://example.com/delight.jpg",
+        }
 
     def get_runtime_status(self) -> dict[str, object]:
         return {
@@ -229,6 +269,9 @@ class _FakeRuntimeController:
             "pool_target_count": 30,
             "last_refresh_at": "2026-03-15T12:00:00+08:00",
         }
+
+    def get_pending_delight(self) -> dict[str, object] | None:
+        return self.delight_candidate
 
     async def refresh_if_needed(self) -> dict[str, object]:
         self.refresh_if_needed_calls += 1
@@ -455,6 +498,28 @@ async def test_submit_feedback_records_event_and_runs_post_feedback_hooks() -> N
     assert soul_engine.immediate_calls == [("like", "把国际局势讲出结构感", "很对胃口")]
     assert soul_engine.feedback_batches == 1
     assert runtime_controller.refresh_after_feedback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_delight_returns_candidate_when_available() -> None:
+    adapter, _, _, _, runtime_controller, _, _ = _build_adapter()
+
+    result = await adapter.get_delight()
+
+    assert result.item is not None
+    assert result.item.bvid == "BV1DLRT"
+    assert result.item.delight_hook == "跨域惊喜"
+    assert result.item.delight_score == 0.93
+
+
+@pytest.mark.asyncio
+async def test_get_delight_returns_none_when_no_candidate() -> None:
+    adapter, _, _, _, runtime_controller, _, _ = _build_adapter()
+    runtime_controller.delight_candidate = None
+
+    result = await adapter.get_delight()
+
+    assert result.item is None
 
 
 def test_build_openclaw_adapter_services_reuses_shared_database(monkeypatch) -> None:
