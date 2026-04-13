@@ -191,7 +191,7 @@ curl -fsSL https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/scrip
 请按照 https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md 的说明帮我用 Docker Compose 部署 OpenBiliClaw 后端(务必用 Bash 的 curl 下载这个文档,不要用 WebFetch)
 ```
 
-支持 macOS / Linux / WSL2。依赖只有 `git` 和 `python3`（3.11+）。脚本会自动克隆仓库、安装依赖、启动后端、做健康检查，最后提示你选择 LLM 提供商（OpenAI / Gemini / DeepSeek / Claude 等）并填写对应的 API Key 和 B 站 Cookie。
+支持 macOS / Linux / WSL2。依赖只有 `git` 和 `python3`（3.11+）。脚本会自动克隆仓库、安装依赖、启动后端、做健康检查，然后提示你选择 LLM 提供商（OpenAI / Gemini / DeepSeek / Claude 等）并填写对应的 API Key 和 B 站 Cookie。凭据就绪后自动完成首次初始化（拉取历史、生成画像、填充推荐池），直接达到可用状态。
 
 > 💡 **Windows 用户？** 如果你已经装了 Docker Desktop，推荐直接用上面的 Docker 方式部署，开箱即用。否则请先安装 [WSL2](https://learn.microsoft.com/zh-cn/windows/wsl/install) 再用终端命令安装。
 

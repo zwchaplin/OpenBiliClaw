@@ -137,7 +137,7 @@ Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/do
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md to deploy the OpenBiliClaw backend via Docker Compose (use Bash `curl` to fetch the document, NOT WebFetch).
 ```
 
-Works on macOS, Linux and WSL2. The only prerequisites are `git` and `python3` (3.11+). The script auto-clones the repo, installs dependencies, starts the backend, runs a health check, and prompts you to choose an LLM provider (OpenAI / Gemini / DeepSeek / Claude etc.) and fill in the corresponding API key and Bilibili cookie.
+Works on macOS, Linux and WSL2. The only prerequisites are `git` and `python3` (3.11+). The script auto-clones the repo, installs dependencies, starts the backend, runs a health check, and prompts you to choose an LLM provider (OpenAI / Gemini / DeepSeek / Claude etc.) and fill in the corresponding API key and Bilibili cookie. Once credentials are set, it automatically runs first-time init (fetches history, builds your soul profile, fills the recommendation pool) so you're ready to go immediately.
 
 > 💡 **On Windows?** If you already have Docker Desktop, use the Docker method above — it works out of the box. Otherwise, install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) first, then use the terminal command.
 

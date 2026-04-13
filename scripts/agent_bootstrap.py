@@ -154,6 +154,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Prepare config and dependencies but do not start the backend.",
     )
     parser.add_argument(
+        "--skip-init",
+        action="store_true",
+        help="Do not run 'openbiliclaw init' after the backend is healthy.",
+    )
+    parser.add_argument(
         "--skip-install",
         action="store_true",
         help="Assume dependencies are already installed (local mode only).",
@@ -679,6 +684,26 @@ def run(args: argparse.Namespace) -> int:
                 },
             )
         )
+
+        # Auto-run init when all credentials are present and --skip-init is not set
+        if not final_status["missing"] and not args.skip_init:
+            info("All credentials present — running 'openbiliclaw init' to reach usable state...")
+            try:
+                init_cmd: list[str] = []
+                if detect_uv():
+                    init_cmd = ["uv", "run", "openbiliclaw", "init"]
+                else:
+                    venv_python = project_dir / ".venv" / "bin" / "python"
+                    if venv_python.exists():
+                        init_cmd = [str(venv_python), "-m", "openbiliclaw.cli", "init"]
+                    else:
+                        init_cmd = ["python3", "-m", "openbiliclaw.cli", "init"]
+                run_streaming(init_cmd, cwd=project_dir, check=False)
+                emit(BootstrapResult("ok", "init_complete", {}))
+            except Exception as exc:
+                emit(BootstrapResult("warning", "init_failed", {"error": str(exc)}))
+                info(f"Init failed ({exc}), but the backend is running. You can run 'openbiliclaw init' manually later.")
+
         return 0
 
     emit(
