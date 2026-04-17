@@ -1962,6 +1962,12 @@ function bindSettings() {
     setVal("cfgOpenrouterModel", cfg.llm?.openrouter?.model);
     setVal("cfgOpenrouterBaseUrl", cfg.llm?.openrouter?.base_url);
 
+    // Embedding
+    const embProvider = document.getElementById("cfgEmbeddingProvider");
+    if (embProvider) embProvider.value = cfg.llm?.embedding?.provider || "";
+    setVal("cfgEmbeddingModel", cfg.llm?.embedding?.model);
+    setVal("cfgEmbeddingSimilarity", cfg.llm?.embedding?.similarity_threshold);
+
     // Bilibili
     const biliAuth = document.getElementById("cfgBiliAuth");
     if (biliAuth) biliAuth.value = cfg.bilibili?.auth_method || "cookie";
@@ -2022,6 +2028,11 @@ function bindSettings() {
           api_key: getVal("cfgOpenrouterKey"),
           model: getVal("cfgOpenrouterModel"),
           base_url: getVal("cfgOpenrouterBaseUrl"),
+        },
+        embedding: {
+          provider: getVal("cfgEmbeddingProvider"),
+          model: getVal("cfgEmbeddingModel"),
+          similarity_threshold: parseFloat(getVal("cfgEmbeddingSimilarity")) || 0.82,
         },
       },
       bilibili: {

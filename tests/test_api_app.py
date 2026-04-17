@@ -1567,3 +1567,215 @@ class TestBackendAPI:
         assert memory.events[0]["metadata"]["bvid"] == "BVresilient"
         # But layers_updated should be empty because ingest raised.
         assert response.json()["layers_updated"] == []
+
+    def test_get_config_returns_llm_and_embedding_settings(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import (
+            Config,
+            EmbeddingConfig,
+            LLMConfig,
+            LLMProviderConfig,
+            save_config,
+        )
+
+        config_path = tmp_path / "config.toml"
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="gemini",
+                gemini=LLMProviderConfig(api_key="test-gemini-key", model="gemini-2.5-flash"),
+                embedding=EmbeddingConfig(
+                    provider="gemini",
+                    model="gemini-embedding-001",
+                    similarity_threshold=0.85,
+                ),
+            ),
+        )
+        save_config(cfg, config_path)
+        monkeypatch.setattr(
+            "openbiliclaw.config.load_config",
+            lambda *_a, **_kw: cfg,
+        )
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        response = client.get("/api/config", params={"reveal_keys": "true"})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # LLM provider fields
+        assert data["llm"]["default_provider"] == "gemini"
+        assert data["llm"]["gemini"]["api_key"] == "test-gemini-key"
+        assert data["llm"]["gemini"]["model"] == "gemini-2.5-flash"
+
+        # Embedding fields
+        assert data["llm"]["embedding"]["provider"] == "gemini"
+        assert data["llm"]["embedding"]["model"] == "gemini-embedding-001"
+        assert data["llm"]["embedding"]["similarity_threshold"] == 0.85
+
+    def test_get_config_masks_api_keys_by_default(
+        self,
+        monkeypatch,
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="openai",
+                openai=LLMProviderConfig(api_key="sk-abcdef1234567890xyzw", model="gpt-4o"),
+            ),
+        )
+        monkeypatch.setattr(
+            "openbiliclaw.config.load_config",
+            lambda *_a, **_kw: cfg,
+        )
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Key should be masked (not equal to the original)
+        assert data["llm"]["openai"]["api_key"] != "sk-abcdef1234567890xyzw"
+        assert "****" in data["llm"]["openai"]["api_key"] or "*" in data["llm"]["openai"]["api_key"]
+
+    def test_put_config_updates_embedding_settings(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import (
+            Config,
+            EmbeddingConfig,
+            LLMConfig,
+            LLMProviderConfig,
+            load_config,
+            save_config,
+        )
+
+        config_path = tmp_path / "config.toml"
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="ollama",
+                ollama=LLMProviderConfig(model="llama3", base_url="http://localhost:11434"),
+                embedding=EmbeddingConfig(
+                    provider="",
+                    model="gemini-embedding-001",
+                    similarity_threshold=0.82,
+                ),
+            ),
+        )
+        save_config(cfg, config_path)
+
+        # Patch load_config to return our config
+        monkeypatch.setattr(
+            "openbiliclaw.config.load_config",
+            lambda *_a, **_kw: cfg,
+        )
+        # Patch save_config to write to our temp path
+        saved_configs: list[Config] = []
+
+        def fake_save(c, path=None):
+            saved_configs.append(c)
+            save_config(c, config_path)
+
+        monkeypatch.setattr(
+            "openbiliclaw.config.save_config",
+            fake_save,
+        )
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        response = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "default_provider": "ollama",
+                    "embedding": {
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                        "similarity_threshold": 0.78,
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ok"] is True
+
+        # Verify the embedding was updated on the config object
+        assert cfg.llm.embedding.provider == "openai"
+        assert cfg.llm.embedding.model == "text-embedding-3-small"
+        assert cfg.llm.embedding.similarity_threshold == 0.78
+
+    def test_put_config_updates_provider_api_key_and_model(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import (
+            Config,
+            LLMConfig,
+            LLMProviderConfig,
+            save_config,
+        )
+
+        config_path = tmp_path / "config.toml"
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="openai",
+                openai=LLMProviderConfig(api_key="", model="gpt-4o"),
+            ),
+        )
+        save_config(cfg, config_path)
+        monkeypatch.setattr(
+            "openbiliclaw.config.load_config",
+            lambda *_a, **_kw: cfg,
+        )
+        monkeypatch.setattr(
+            "openbiliclaw.config.save_config",
+            lambda c, path=None: save_config(c, config_path),
+        )
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        response = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "default_provider": "deepseek",
+                    "deepseek": {
+                        "api_key": "sk-new-deepseek-key",
+                        "model": "deepseek-chat",
+                        "base_url": "https://api.deepseek.com",
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ok"] is True
+
+        # Verify provider switch and key update
+        assert cfg.llm.default_provider == "deepseek"
+        assert cfg.llm.deepseek.api_key == "sk-new-deepseek-key"
+        assert cfg.llm.deepseek.model == "deepseek-chat"
+        assert cfg.llm.deepseek.base_url == "https://api.deepseek.com"

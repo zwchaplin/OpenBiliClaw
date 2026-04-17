@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import {
   appendRecommendations,
   fetchActivityFeed,
+  fetchConfig,
   fetchProfileSummary,
   reshuffleRecommendations,
+  updateConfig,
 } from "../popup/popup-api.js";
 
 test("reshuffleRecommendations posts to reshuffle endpoint", async () => {
@@ -190,4 +192,85 @@ test("fetchProfileSummary forwards limit and cursor for cognition history pagina
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "http://127.0.0.1:8420/api/profile-summary?limit=3&cursor=6");
   assert.equal(calls[0].options.method, "GET");
+});
+
+test("fetchConfig sends GET to /config with reveal_keys", async () => {
+  const calls: Array<{ url: string; options: any }> = [];
+  globalThis.fetch = async (url: any, options: any) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return {
+          language: "zh",
+          llm: {
+            default_provider: "gemini",
+            gemini: { api_key: "test-key", model: "gemini-2.5-flash" },
+            embedding: {
+              provider: "gemini",
+              model: "gemini-embedding-001",
+              similarity_threshold: 0.85,
+            },
+          },
+        };
+      },
+    };
+  };
+
+  const result = await fetchConfig();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8420/api/config?reveal_keys=true");
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(result.llm.default_provider, "gemini");
+  assert.equal(result.llm.gemini.api_key, "test-key");
+  assert.equal(result.llm.embedding.provider, "gemini");
+  assert.equal(result.llm.embedding.model, "gemini-embedding-001");
+  assert.equal(result.llm.embedding.similarity_threshold, 0.85);
+});
+
+test("updateConfig sends PUT with embedding config", async () => {
+  const calls: Array<{ url: string; options: any }> = [];
+  globalThis.fetch = async (url: any, options: any) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return {
+          ok: true,
+          config: { language: "zh", llm: { embedding: { provider: "openai", model: "text-embedding-3-small", similarity_threshold: 0.78 } } },
+          message: "配置已保存。",
+          reloaded: true,
+        };
+      },
+    };
+  };
+
+  const payload = {
+    llm: {
+      default_provider: "openai",
+      openai: { api_key: "sk-test", model: "gpt-4o" },
+      embedding: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        similarity_threshold: 0.78,
+      },
+    },
+  };
+
+  const result = await updateConfig(payload);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8420/api/config");
+  assert.equal(calls[0].options.method, "PUT");
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+
+  const sentBody = JSON.parse(calls[0].options.body);
+  assert.equal(sentBody.llm.embedding.provider, "openai");
+  assert.equal(sentBody.llm.embedding.model, "text-embedding-3-small");
+  assert.equal(sentBody.llm.embedding.similarity_threshold, 0.78);
+  assert.equal(sentBody.llm.openai.api_key, "sk-test");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reloaded, true);
 });
