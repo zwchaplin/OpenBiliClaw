@@ -97,6 +97,17 @@ executable = ""
 # Use headed mode for debugging
 headed = false
 
+# ── 多来源适配器浏览器配置（Xiaohongshu/V2EX/Zhihu 等通过 Web 抓取的来源）──
+# 与 [bilibili.browser] 独立：Bilibili 走 agent-browser CLI，
+# 其它来源推荐走真实登录态 Chrome + Playwright CDP。
+[sources.browser]
+# 预先启动一个 Chrome 监听 CDP 端口，可复用现有登录态：
+#   chrome --remote-debugging-port=9222 --user-data-dir=$HOME/.openbiliclaw-chrome
+# 然后在浏览器里登录要抓取的平台。留空则回落到 agent-browser（无登录态）。
+cdp_url = ""
+# agent-browser 回落路径是否使用 headed 模式
+headed = false
+
 [scheduler]
 # Enable scheduled content discovery
 enabled = true

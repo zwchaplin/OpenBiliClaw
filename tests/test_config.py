@@ -322,6 +322,40 @@ def test_build_config_supports_account_sync_interval() -> None:
     assert config.scheduler.account_sync_interval_hours == 12
 
 
+def test_build_config_supports_sources_browser_cdp_url() -> None:
+    config = _build_config(
+        {
+            "sources": {
+                "browser": {
+                    "cdp_url": "http://127.0.0.1:9222",
+                    "headed": True,
+                }
+            }
+        }
+    )
+
+    assert config.sources.browser_cdp_url == "http://127.0.0.1:9222"
+    assert config.sources.browser_headed is True
+
+
+def test_sources_browser_defaults_are_empty() -> None:
+    config = _build_config({})
+
+    assert config.sources.browser_cdp_url == ""
+    assert config.sources.browser_headed is False
+
+
+def test_save_config_round_trips_sources_browser_cdp_url(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config = Config()
+    config.sources.browser_cdp_url = "http://127.0.0.1:9222"
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.sources.browser_cdp_url == "http://127.0.0.1:9222"
+
+
 def test_save_config_round_trips_runtime_changes(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config = Config()

@@ -1,7 +1,8 @@
 """Generic web source adapter — fetches and extracts content from any web page.
 
-Uses agent-browser to load pages and LLM to extract structured content.
-Works for any platform that doesn't have a dedicated API adapter.
+Uses a browser backend (Playwright CDP or agent-browser) to load pages
+and an LLM to extract structured content. Works for any platform that
+doesn't have a dedicated API adapter.
 """
 
 from __future__ import annotations
@@ -9,19 +10,19 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from openbiliclaw.sources.browser import BrowserManager
+from openbiliclaw.sources.llm_extractor import extract_content_from_page
+
 if TYPE_CHECKING:
     from openbiliclaw.discovery.engine import DiscoveredContent
-    from openbiliclaw.sources.protocol import SourceRecipe
     from openbiliclaw.soul.profile import SoulProfile
+    from openbiliclaw.sources.protocol import SourceRecipe
 
 logger = logging.getLogger(__name__)
 
 
 class WebSourceAdapter:
     """Generic web content adapter using browser + LLM extraction.
-
-    Supports any web page by navigating with agent-browser and extracting
-    structured content items via LLM.
 
     Recipe config keys:
         url_template: URL pattern, may contain ``{query}`` placeholder.
@@ -35,10 +36,12 @@ class WebSourceAdapter:
         llm_service: Any,
         browser_executable: str = "",
         browser_headed: bool = False,
+        browser_cdp_url: str = "",
     ) -> None:
         self._llm_service = llm_service
         self._browser_executable = browser_executable
         self._browser_headed = browser_headed
+        self._browser_cdp_url = browser_cdp_url
 
     @property
     def source_type(self) -> str:
@@ -56,12 +59,10 @@ class WebSourceAdapter:
             logger.warning("WebSourceAdapter: no URL for recipe %s", recipe.id)
             return []
 
-        from openbiliclaw.sources.browser import BrowserManager
-        from openbiliclaw.sources.llm_extractor import extract_content_from_page
-
         browser = BrowserManager(
             executable=self._browser_executable,
             headed=self._browser_headed,
+            cdp_url=self._browser_cdp_url,
         )
 
         if not browser.is_available:

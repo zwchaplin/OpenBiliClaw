@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -178,6 +178,19 @@ class RuntimeContext:
         )
         new_discovery_engine.register_adapter(bilibili_adapter)
 
+        # Register Xiaohongshu (web-scraping) adapter. The CDP URL, when
+        # set in config, points to a pre-launched logged-in Chrome; empty
+        # means the adapter falls back to agent-browser (anonymous).
+        from openbiliclaw.sources.web_adapter import XiaohongshuAdapter
+
+        xiaohongshu_adapter = XiaohongshuAdapter(
+            llm_service=new_llm_service,
+            browser_executable=new_config.bilibili.browser_executable,
+            browser_headed=new_config.sources.browser_headed,
+            browser_cdp_url=new_config.sources.browser_cdp_url,
+        )
+        new_discovery_engine.register_adapter(xiaohongshu_adapter)
+
         # 8. Continuous refresh controller
         new_runtime_controller = ContinuousRefreshController(
             memory_manager=self.memory_manager,
@@ -251,23 +264,17 @@ class RuntimeContext:
         # Start new tasks from the freshly-built components
         run_forever = getattr(self.runtime_controller, "run_forever", None)
         app.state.refresh_task = (
-            asyncio.create_task(run_forever())
-            if callable(run_forever)
-            else None
+            asyncio.create_task(run_forever()) if callable(run_forever) else None
         )
 
         sync_forever = getattr(self.account_sync_service, "run_forever", None)
         app.state.account_sync_task = (
-            asyncio.create_task(sync_forever())
-            if callable(sync_forever)
-            else None
+            asyncio.create_task(sync_forever()) if callable(sync_forever) else None
         )
 
         update_forever = getattr(self.auto_update_service, "run_forever", None)
         app.state.auto_update_task = (
-            asyncio.create_task(update_forever())
-            if callable(update_forever)
-            else None
+            asyncio.create_task(update_forever()) if callable(update_forever) else None
         )
 
         # Kick speculator to seed speculative interests

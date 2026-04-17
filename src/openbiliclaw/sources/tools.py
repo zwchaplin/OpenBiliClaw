@@ -6,10 +6,9 @@ manage content source subscriptions (SourceRecipe) on behalf of the user.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -110,7 +109,7 @@ class SourceToolDispatcher:
             "target_share": 4,
             "enabled": True,
             "created_by": "agent",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         self._db.save_source_recipe(recipe)
 

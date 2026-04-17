@@ -134,6 +134,25 @@ class SchedulerConfig:
 
 
 @dataclass
+class SourcesConfig:
+    """Multi-source content adapters configuration.
+
+    Applies to non-Bilibili sources that use the generic web adapter
+    (Xiaohongshu, V2EX, Zhihu, ...). The browser options here are
+    independent of ``bilibili.browser`` (which controls the agent-browser
+    CLI used by Bilibili login/QR flows).
+    """
+
+    # URL of a pre-launched Chrome DevTools endpoint, e.g.
+    # ``http://127.0.0.1:9222``. When set, the web adapter connects via
+    # Playwright ``chromium.connect_over_cdp`` and reuses that Chrome's
+    # logged-in session. When empty, falls back to agent-browser CLI.
+    browser_cdp_url: str = ""
+    # Whether to launch a headed agent-browser (fallback path only).
+    browser_headed: bool = False
+
+
+@dataclass
 class StorageConfig:
     """Storage configuration."""
 
@@ -171,6 +190,7 @@ class Config:
     data_dir: str = "data"
     llm: LLMConfig = field(default_factory=LLMConfig)
     bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
+    sources: SourcesConfig = field(default_factory=SourcesConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -235,9 +255,7 @@ def _ensure_default_config_file(diagnostics: ConfigDiagnostics) -> None:
 
     shutil.copyfile(example_path, config_path)
     diagnostics.created_default_config = True
-    diagnostics.messages.append(
-        f"未检测到 config.toml，已自动生成模板文件：{config_path}。"
-    )
+    diagnostics.messages.append(f"未检测到 config.toml，已自动生成模板文件：{config_path}。")
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -274,6 +292,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     general = raw.get("general", {})
     llm_raw = raw.get("llm", {})
     bili_raw = raw.get("bilibili", {})
+    sources_raw = raw.get("sources", {})
     sched_raw = raw.get("scheduler", {})
     store_raw = raw.get("storage", {})
     logging_raw = raw.get("logging", {})
@@ -287,26 +306,29 @@ def _build_config(raw: dict[str, Any]) -> Config:
         deepseek=LLMProviderConfig(**llm_raw.get("deepseek", {})),
         ollama=LLMProviderConfig(**llm_raw.get("ollama", {})),
         openrouter=LLMProviderConfig(**llm_raw.get("openrouter", {})),
-        embedding=EmbeddingConfig(**{
-            k: v for k, v in embedding_raw.items()
-            if k in ("provider", "model", "similarity_threshold")
-        }),
-        soul=ModuleLLMConfig(**{
-            k: v for k, v in llm_raw.get("soul", {}).items()
-            if k in ("provider", "model")
-        }),
-        discovery=ModuleLLMConfig(**{
-            k: v for k, v in llm_raw.get("discovery", {}).items()
-            if k in ("provider", "model")
-        }),
-        recommendation=ModuleLLMConfig(**{
-            k: v for k, v in llm_raw.get("recommendation", {}).items()
-            if k in ("provider", "model")
-        }),
-        evaluation=ModuleLLMConfig(**{
-            k: v for k, v in llm_raw.get("evaluation", {}).items()
-            if k in ("provider", "model")
-        }),
+        embedding=EmbeddingConfig(
+            **{
+                k: v
+                for k, v in embedding_raw.items()
+                if k in ("provider", "model", "similarity_threshold")
+            }
+        ),
+        soul=ModuleLLMConfig(
+            **{k: v for k, v in llm_raw.get("soul", {}).items() if k in ("provider", "model")}
+        ),
+        discovery=ModuleLLMConfig(
+            **{k: v for k, v in llm_raw.get("discovery", {}).items() if k in ("provider", "model")}
+        ),
+        recommendation=ModuleLLMConfig(
+            **{
+                k: v
+                for k, v in llm_raw.get("recommendation", {}).items()
+                if k in ("provider", "model")
+            }
+        ),
+        evaluation=ModuleLLMConfig(
+            **{k: v for k, v in llm_raw.get("evaluation", {}).items() if k in ("provider", "model")}
+        ),
     )
 
     browser_raw = bili_raw.pop("browser", {})
@@ -317,11 +339,18 @@ def _build_config(raw: dict[str, Any]) -> Config:
         browser_headed=browser_raw.get("headed", False),
     )
 
+    sources_browser_raw = sources_raw.get("browser", {})
+    sources = SourcesConfig(
+        browser_cdp_url=sources_browser_raw.get("cdp_url", ""),
+        browser_headed=sources_browser_raw.get("headed", False),
+    )
+
     return Config(
         language=general.get("language", "zh"),
         data_dir=general.get("data_dir", "data"),
         llm=llm,
         bilibili=bilibili,
+        sources=sources,
         scheduler=SchedulerConfig(**sched_raw),
         storage=StorageConfig(**store_raw),
         logging=LoggingConfig(**logging_raw),
@@ -368,8 +397,7 @@ def _collect_config_issues(config: Config) -> list[ConfigIssue]:
             ConfigIssue(
                 field=required_field,
                 message=(
-                    f"默认 provider `{provider_name}` 缺少 `api_key`，"
-                    "请在 config.toml 中填写。"
+                    f"默认 provider `{provider_name}` 缺少 `api_key`，请在 config.toml 中填写。"
                 ),
             )
         )
@@ -454,11 +482,11 @@ def _render_config_toml(config: Config) -> str:
     """Render a Config dataclass into TOML."""
     lines = [
         "[general]",
-        f'language = {_toml_string(config.language)}',
-        f'data_dir = {_toml_string(config.data_dir)}',
+        f"language = {_toml_string(config.language)}",
+        f"data_dir = {_toml_string(config.data_dir)}",
         "",
         "[llm]",
-        f'default_provider = {_toml_string(config.llm.default_provider)}',
+        f"default_provider = {_toml_string(config.llm.default_provider)}",
         "",
     ]
     lines.extend(_render_provider_section("openai", config.llm.openai))
@@ -467,54 +495,60 @@ def _render_config_toml(config: Config) -> str:
     lines.extend(_render_provider_section("deepseek", config.llm.deepseek))
     lines.extend(_render_provider_section("ollama", config.llm.ollama))
     lines.extend(_render_provider_section("openrouter", config.llm.openrouter))
-    lines.extend([
-        "[llm.embedding]",
-        f'provider = {_toml_string(config.llm.embedding.provider)}',
-        f'model = {_toml_string(config.llm.embedding.model)}',
-        f"similarity_threshold = {config.llm.embedding.similarity_threshold}",
-        "",
-        "# Per-module LLM overrides (empty = use global default)",
-        "[llm.soul]",
-        f'provider = {_toml_string(config.llm.soul.provider)}',
-        f'model = {_toml_string(config.llm.soul.model)}',
-        "",
-        "[llm.discovery]",
-        f'provider = {_toml_string(config.llm.discovery.provider)}',
-        f'model = {_toml_string(config.llm.discovery.model)}',
-        "",
-        "[llm.recommendation]",
-        f'provider = {_toml_string(config.llm.recommendation.provider)}',
-        f'model = {_toml_string(config.llm.recommendation.model)}',
-        "",
-        "[llm.evaluation]",
-        f'provider = {_toml_string(config.llm.evaluation.provider)}',
-        f'model = {_toml_string(config.llm.evaluation.model)}',
-        "",
-    ])
+    lines.extend(
+        [
+            "[llm.embedding]",
+            f"provider = {_toml_string(config.llm.embedding.provider)}",
+            f"model = {_toml_string(config.llm.embedding.model)}",
+            f"similarity_threshold = {config.llm.embedding.similarity_threshold}",
+            "",
+            "# Per-module LLM overrides (empty = use global default)",
+            "[llm.soul]",
+            f"provider = {_toml_string(config.llm.soul.provider)}",
+            f"model = {_toml_string(config.llm.soul.model)}",
+            "",
+            "[llm.discovery]",
+            f"provider = {_toml_string(config.llm.discovery.provider)}",
+            f"model = {_toml_string(config.llm.discovery.model)}",
+            "",
+            "[llm.recommendation]",
+            f"provider = {_toml_string(config.llm.recommendation.provider)}",
+            f"model = {_toml_string(config.llm.recommendation.model)}",
+            "",
+            "[llm.evaluation]",
+            f"provider = {_toml_string(config.llm.evaluation.provider)}",
+            f"model = {_toml_string(config.llm.evaluation.model)}",
+            "",
+        ]
+    )
     lines.extend(
         [
             "[bilibili]",
-            f'auth_method = {_toml_string(config.bilibili.auth_method)}',
-            f'cookie = {_toml_string(config.bilibili.cookie)}',
+            f"auth_method = {_toml_string(config.bilibili.auth_method)}",
+            f"cookie = {_toml_string(config.bilibili.cookie)}",
             "",
             "[bilibili.browser]",
-            f'executable = {_toml_string(config.bilibili.browser_executable)}',
+            f"executable = {_toml_string(config.bilibili.browser_executable)}",
             f"headed = {_toml_bool(config.bilibili.browser_headed)}",
+            "",
+            "[sources.browser]",
+            f"cdp_url = {_toml_string(config.sources.browser_cdp_url)}",
+            f"headed = {_toml_bool(config.sources.browser_headed)}",
             "",
             "[scheduler]",
             f"enabled = {_toml_bool(config.scheduler.enabled)}",
-            f'discovery_cron = {_toml_string(config.scheduler.discovery_cron)}',
+            f"discovery_cron = {_toml_string(config.scheduler.discovery_cron)}",
             f"pool_target_count = {config.scheduler.pool_target_count}",
             f"account_sync_interval_hours = {config.scheduler.account_sync_interval_hours}",
             "",
             "[storage]",
-            f'db_path = {_toml_string(config.storage.db_path)}',
+            f"db_path = {_toml_string(config.storage.db_path)}",
             "",
             "[logging]",
-            f'level = {_toml_string(config.logging.level)}',
-            f'file_level = {_toml_string(config.logging.file_level)}',
-            f'directory = {_toml_string(config.logging.directory)}',
-            f'filename = {_toml_string(config.logging.filename)}',
+            f"level = {_toml_string(config.logging.level)}",
+            f"file_level = {_toml_string(config.logging.file_level)}",
+            f"directory = {_toml_string(config.logging.directory)}",
+            f"filename = {_toml_string(config.logging.filename)}",
             "",
         ]
     )
@@ -524,13 +558,13 @@ def _render_config_toml(config: Config) -> str:
 def _render_provider_section(name: str, provider: LLMProviderConfig) -> list[str]:
     """Render one provider subsection."""
     lines = [f"[llm.{name}]"]
-    lines.append(f'api_key = {_toml_string(provider.api_key)}')
-    lines.append(f'model = {_toml_string(provider.model)}')
+    lines.append(f"api_key = {_toml_string(provider.api_key)}")
+    lines.append(f"model = {_toml_string(provider.model)}")
     if name in {"openai", "deepseek", "ollama", "openrouter"}:
-        lines.append(f'base_url = {_toml_string(provider.base_url)}')
+        lines.append(f"base_url = {_toml_string(provider.base_url)}")
     if name == "openrouter":
-        lines.append(f'http_referer = {_toml_string(provider.http_referer)}')
-        lines.append(f'x_title = {_toml_string(provider.x_title)}')
+        lines.append(f"http_referer = {_toml_string(provider.http_referer)}")
+        lines.append(f"x_title = {_toml_string(provider.x_title)}")
     lines.append("")
     return lines
 

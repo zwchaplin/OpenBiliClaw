@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from openbiliclaw.discovery.engine import DiscoveredContent, DiscoveryStrategy
-    from openbiliclaw.sources.protocol import SourceRecipe
     from openbiliclaw.soul.profile import SoulProfile
+    from openbiliclaw.sources.protocol import SourceRecipe
 
 logger = logging.getLogger(__name__)
 
