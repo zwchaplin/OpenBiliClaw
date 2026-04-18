@@ -20,8 +20,10 @@ import {
   type ViewportRect,
   type XhsUrlObservation,
 } from "./xhs/passive.js";
+import { registerTaskExecutor } from "./xhs/task-executor.js";
 
 startCollector(xiaohongshuAdapter);
+registerTaskExecutor();
 
 const PASSIVE_SCROLL_DEBOUNCE_MS = 500;
 const PASSIVE_TOLERANCE_BELOW_PX = 400;
