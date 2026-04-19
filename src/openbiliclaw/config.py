@@ -18,7 +18,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _PROJECT_ROOT_ENV = "OPENBILICLAW_PROJECT_ROOT"
 _SUPPORTED_AUTH_METHODS = {"cookie", "qrcode", "none"}
 _MIN_POOL_TARGET_COUNT = 1
-_MAX_POOL_TARGET_COUNT = 300
+_MAX_POOL_TARGET_COUNT = 600
 _REMOTE_PROVIDER_FIELDS = {
     "openai": "llm.openai.api_key",
     "claude": "llm.claude.api_key",
@@ -120,7 +120,7 @@ class SchedulerConfig:
 
     enabled: bool = True
     discovery_cron: str = "0 */4 * * *"
-    pool_target_count: int = 300
+    pool_target_count: int = 600
     account_sync_interval_hours: int = 6
     speculation_interval_minutes: int = 10
     speculation_ttl_days: int = 3
@@ -142,7 +142,7 @@ class XiaohongshuSourceConfig:
     background-tab tasks). No sidecar or backend crawling needed.
     """
     # Max Soul-driven search tasks the backend may enqueue per day.
-    daily_search_budget: int = 20
+    daily_search_budget: int = 30
     # Max creator-subscription fetch tasks per day.
     daily_creator_budget: int = 10
     # Seconds the extension dispatcher waits between tasks.
@@ -184,6 +184,12 @@ class LoggingConfig:
     file_level: str = "DEBUG"
     directory: str = "logs"
     filename: str = "openbiliclaw.log"
+    # 单个日志文件最大 MB 数；>0 时启用轮转（默认 1024 = 1 GB）。
+    # 设为 0 表示不轮转（仅调试用，线上不建议）。
+    max_file_size_mb: int = 1024
+    # 保留的历史日志份数；至少为 1 才会真正轮转（0 会让 RotatingFileHandler 完全不轮转）。
+    # 默认 1：磁盘占用封顶在 `max_file_size_mb * 2`。
+    backup_count: int = 1
 
     @property
     def directory_path(self) -> Path:
@@ -362,7 +368,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
         browser_cdp_url=sources_browser_raw.get("cdp_url", ""),
         browser_headed=sources_browser_raw.get("headed", False),
         xiaohongshu=XiaohongshuSourceConfig(
-            daily_search_budget=int(xhs_raw.get("daily_search_budget", 20)),
+            daily_search_budget=int(xhs_raw.get("daily_search_budget", 30)),
             daily_creator_budget=int(xhs_raw.get("daily_creator_budget", 10)),
             task_interval_seconds=int(xhs_raw.get("task_interval_seconds", 45)),
         ),
@@ -577,6 +583,8 @@ def _render_config_toml(config: Config) -> str:
             f"file_level = {_toml_string(config.logging.file_level)}",
             f"directory = {_toml_string(config.logging.directory)}",
             f"filename = {_toml_string(config.logging.filename)}",
+            f"max_file_size_mb = {config.logging.max_file_size_mb}",
+            f"backup_count = {config.logging.backup_count}",
             "",
         ]
     )

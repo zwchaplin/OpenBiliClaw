@@ -38,6 +38,7 @@ const COGNITION_POLL_URL = "http://127.0.0.1:8420/api/cognition-updates/pending"
 const COGNITION_ACK_URL = "http://127.0.0.1:8420/api/cognition-updates/seen";
 const DELIGHT_ACK_URL = "http://127.0.0.1:8420/api/delight/sent";
 const XHS_OBSERVED_URLS_URL = "http://127.0.0.1:8420/api/sources/xhs/observed-urls";
+const XHS_TOKENS_URL = "http://127.0.0.1:8420/api/sources/xhs/tokens";
 const RUNTIME_STREAM_URL = "ws://127.0.0.1:8420/api/runtime-stream";
 const WS_RECONNECT_DELAY = 5_000;
 type PendingNotification = import("./notifications.js").PendingNotification;
@@ -262,9 +263,30 @@ async function postXhsObservedUrls(payload: Record<string, unknown>): Promise<vo
   }
 }
 
+async function postXhsTokens(
+  payload: { pairs: Array<{ note_id: string; xsec_token: string }> },
+): Promise<void> {
+  if (!payload?.pairs || payload.pairs.length === 0) return;
+  try {
+    await fetch(XHS_TOKENS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Best-effort — tokens that don't land just stay as bare URLs for now.
+  }
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === "XHS_URLS_OBSERVED") {
     void postXhsObservedUrls(message.data as Record<string, unknown>);
+    return;
+  }
+  if (message.action === "XHS_TOKENS_OBSERVED") {
+    void postXhsTokens(
+      message.data as { pairs: Array<{ note_id: string; xsec_token: string }> },
+    );
     return;
   }
   if (message.action === "XHS_TASK_RESULT") {

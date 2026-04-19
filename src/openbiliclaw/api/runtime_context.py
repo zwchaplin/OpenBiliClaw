@@ -188,6 +188,21 @@ class RuntimeContext:
         new_discovery_engine.register_adapter(xiaohongshu_adapter)
 
         # 8. Continuous refresh controller
+        new_xhs_producer: Any = None
+        if hasattr(self.database, "conn"):
+            from openbiliclaw.runtime.xhs_producer import XhsTaskProducer
+            from openbiliclaw.sources.xhs_tasks import XhsTaskQueue
+
+            xhs_cfg = getattr(new_config.sources, "xiaohongshu", None)
+            sched_cfg = getattr(new_config, "scheduler", None)
+            new_xhs_producer = XhsTaskProducer(
+                task_queue=XhsTaskQueue(self.database),
+                soul_engine=new_soul_engine,
+                llm_service=new_llm_service,
+                enabled=bool(getattr(sched_cfg, "enabled", True)),
+                daily_budget=int(getattr(xhs_cfg, "daily_search_budget", 30)),
+            )
+
         new_runtime_controller = ContinuousRefreshController(
             memory_manager=self.memory_manager,
             database=self.database,
@@ -196,6 +211,7 @@ class RuntimeContext:
             recommendation_engine=new_recommendation_engine,
             pool_target_count=new_config.scheduler.pool_target_count,
             event_hub=self.event_hub,
+            xhs_producer=new_xhs_producer,
         )
 
         # 9. Account sync

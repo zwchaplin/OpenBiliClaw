@@ -129,6 +129,46 @@ class DiscoveredContent:
         if not self.content_url and self.bvid:
             self.content_url = f"https://www.bilibili.com/video/{self.bvid}"
 
+    def to_cache_kwargs(self) -> dict[str, object]:
+        """Build the kwargs dict for ``Database.cache_content()``.
+
+        Single source of truth for the DiscoveredContent → content_cache
+        field mapping.  Used by discovery's ``_cache_results`` and the
+        recommendation engine's ``classify_pool_backlog`` persist loop.
+        """
+        return {
+            "title": self.title,
+            "up_name": self.up_name,
+            "up_mid": self.up_mid,
+            "duration": self.duration,
+            "tags": self.tags,
+            "topic_key": self.topic_key,
+            "topic_group": self.topic_group,
+            "style_key": self.style_key,
+            "description": self.description,
+            "cover_url": self.cover_url,
+            "view_count": self.view_count,
+            "like_count": self.like_count,
+            "relevance_score": self.relevance_score,
+            "relevance_reason": self.relevance_reason,
+            "candidate_tier": self.candidate_tier,
+            "source": self.source_strategy,
+            "source_platform": self.source_platform or "bilibili",
+            "content_id": self.content_id or self.bvid,
+            "content_url": self.content_url,
+            "author_name": self.author_name or self.up_name,
+        }
+
+
+# Canonical set of LLM-returned style_key values accepted by evaluation.
+# Shared across discovery and recommendation — must stay in sync.
+VALID_STYLE_KEYS: frozenset[str] = frozenset({
+    "game_strategy", "news_brief", "practical_guide", "story_doc",
+    "visual_showcase", "tech_analysis",
+    "deep_dive", "fun_variety", "lifestyle", "review_roundup",
+    "light_chat",
+})
+
 
 class DiscoveryStrategy(ABC):
     """Base class for content discovery strategies."""
@@ -555,12 +595,7 @@ class ContentDiscoveryEngine:
             return 0.0
 
         # Validate LLM-returned style_key against allowed values
-        _VALID_STYLES = {
-            "game_strategy", "news_brief", "practical_guide", "story_doc",
-            "visual_showcase", "tech_analysis",
-            "deep_dive", "fun_variety", "lifestyle", "review_roundup",
-            "light_chat",
-        }
+        _VALID_STYLES = VALID_STYLE_KEYS
 
         content.relevance_score = score
         content.relevance_reason = reason
@@ -894,6 +929,9 @@ class ContentDiscoveryEngine:
                     candidate_tier="backfill",
                     discovered_at=str(row.get("discovered_at", "")),
                     last_scored_at=str(row.get("last_scored_at", "")),
+                    content_id=str(row.get("content_id", "") or bvid),
+                    content_url=str(row.get("content_url", "")),
+                    source_platform=str(row.get("source_platform", "") or "bilibili"),
                 )
             )
             if len(candidates) >= limit:
@@ -1236,24 +1274,6 @@ class ContentDiscoveryEngine:
             return
         for item in results:
             try:
-                self._database.cache_content(
-                    item.bvid,
-                    title=item.title,
-                    up_name=item.up_name,
-                    up_mid=item.up_mid,
-                    duration=item.duration,
-                    tags=item.tags,
-                    topic_key=item.topic_key,
-                    topic_group=item.topic_group,
-                    style_key=item.style_key,
-                    description=item.description,
-                    cover_url=item.cover_url,
-                    view_count=item.view_count,
-                    like_count=item.like_count,
-                    relevance_score=item.relevance_score,
-                    relevance_reason=item.relevance_reason,
-                    candidate_tier=item.candidate_tier,
-                    source=item.source_strategy,
-                )
+                self._database.cache_content(item.bvid, **item.to_cache_kwargs())
             except Exception:
                 logger.exception("Failed to cache discovered content: %s", item.bvid)

@@ -547,6 +547,24 @@ def create_app(
             ],
         )
 
+    async def _classify_new_pool_items() -> None:
+        """Run LLM classification on pool items that lack content features.
+
+        Called after XHS (or any non-bilibili) content is ingested.  This
+        ensures every item gets ``style_key``, ``topic_group``, and
+        ``relevance_score`` before it can be recommended — same treatment
+        bilibili content receives during discovery.
+        """
+        if ctx.recommendation_engine is None or ctx.soul_engine is None:
+            return
+        try:
+            profile = await ctx.soul_engine.get_profile()
+            await ctx.recommendation_engine.classify_pool_backlog(
+                profile=profile, limit=30,
+            )
+        except Exception:
+            logger.exception("Background pool classification failed")
+
     async def _trigger_replenishment_if_needed() -> None:
         """Fire a background Discovery refresh when the pool runs low."""
         curator = getattr(ctx.recommendation_engine, "_curator", None)
@@ -940,6 +958,86 @@ def create_app(
     _XHS_MAX_URLS_PER_BATCH = 50
     _XHS_URL_PREFIX = "https://www.xiaohongshu.com/"
 
+    def _pick_best_xhs_url(database: Any, note_id: str, incoming: str) -> str:
+        """Return the most share-worthy URL for a xhs note.
+
+        xhs search-result pages don't render ``xsec_token`` into ``<a href>``
+        (React SPA keeps the token in props, not DOM), but explore-feed
+        cards do. When the same note arrives both ways, prefer the URL
+        that carries a token — without it, outbound links can silently
+        dead-end at an xhs login wall.
+
+        Order of preference:
+        1. ``incoming`` URL if it already has ``xsec_token=``
+        2. Any prior ``xhs_observed_urls`` row for this note with a token
+        3. Existing ``content_cache.content_url`` if it has a token
+        4. Fall back to ``incoming`` (bare URL — still works for the
+           logged-in user on the xhs domain, just not guaranteed for
+           share/outbound traffic)
+        """
+        if "xsec_token=" in incoming:
+            return incoming
+        try:
+            row = database.conn.execute(
+                "SELECT url FROM xhs_observed_urls "
+                "WHERE url LIKE ? AND url LIKE '%xsec_token=%' "
+                "ORDER BY observed_at DESC LIMIT 1",
+                (f"%/{note_id}?%",),
+            ).fetchone()
+            if row and row["url"]:
+                return str(row["url"])
+        except Exception:
+            pass
+        try:
+            row = database.conn.execute(
+                "SELECT content_url FROM content_cache WHERE bvid=?",
+                (note_id,),
+            ).fetchone()
+            if row and isinstance(row["content_url"], str) and "xsec_token=" in row["content_url"]:
+                return str(row["content_url"])
+        except Exception:
+            pass
+        return incoming
+
+    def _backfill_xhs_tokens(database: Any, urls: list[str]) -> int:
+        """Upgrade cached xhs rows whose content_url lacks xsec_token.
+
+        The extension often observes the same note twice — once from a
+        search result page (no token in ``<a href>``) and once from an
+        explore-feed card (token present). When a tokenized URL arrives
+        later, rewrite the previously-cached bare URL so share links
+        don't dead-end at xhs's login wall.
+        """
+        from urllib.parse import urlparse
+
+        updated = 0
+        for url in urls:
+            if "xsec_token=" not in url:
+                continue
+            try:
+                path = urlparse(url).path.strip("/")
+                note_id = path.rsplit("/", 1)[-1] if path else ""
+            except Exception:
+                continue
+            if not note_id:
+                continue
+            try:
+                cursor = database.conn.execute(
+                    "UPDATE content_cache SET content_url=? "
+                    "WHERE bvid=? AND source_platform='xiaohongshu' "
+                    "AND (content_url = '' OR content_url NOT LIKE '%xsec_token=%')",
+                    (url, note_id),
+                )
+                updated += cursor.rowcount or 0
+            except Exception:
+                continue
+        if updated:
+            try:
+                database.conn.commit()
+            except Exception:
+                pass
+        return updated
+
     def _cache_xhs_notes(
         database: Any, notes: list[dict[str, Any]], page_type: str
     ) -> int:
@@ -961,18 +1059,24 @@ def create_app(
                 continue
 
             title = str(note.get("title", "") or "").strip()
+            if not title:
+                continue  # Skip notes with empty title — they produce blank recommendation cards
             author = str(note.get("author", "") or "").strip()
             cover_url = str(note.get("cover_url", "") or "").strip()
+            best_url = _pick_best_xhs_url(database, note_id, url)
 
-            # Cache as DiscoveredContent with multi-source fields
+            # Cache as DiscoveredContent with multi-source fields.
+            # NOTE: `cache_content` reads the `source` kwarg (not `source_strategy`)
+            # for the content_cache.source column — passing the wrong key silently
+            # dropped the label and was the cause of empty-source xhs rows.
             database.cache_content(
                 bvid=note_id,
                 title=title,
                 up_name=author,
                 cover_url=cover_url,
-                source_strategy=f"xhs-extension-{page_type}",
+                source=f"xhs-extension-{page_type}",
                 content_id=note_id,
-                content_url=url,
+                content_url=best_url,
                 source_platform="xiaohongshu",
                 author_name=author,
             )
@@ -980,13 +1084,16 @@ def create_app(
         return cached
 
     @app.post("/api/sources/xhs/observed-urls")
-    def ingest_xhs_observed_urls(payload: dict[str, Any]) -> dict[str, Any]:
+    async def ingest_xhs_observed_urls(payload: dict[str, Any]) -> dict[str, Any]:
         """Accept xhs note URLs + optional metadata the extension collected.
 
         Body: ``{ "urls": [...], "notes": [{url, title, author, cover_url}], "page_type": "..." }``
 
         When ``notes`` is present, metadata is stored directly into content_cache
-        as DiscoveredContent — no sidecar enrichment needed.
+        as DiscoveredContent — no sidecar enrichment needed.  A background LLM
+        classification task is spawned so the content receives the same
+        ``style_key`` / ``topic_group`` / ``relevance_score`` that bilibili
+        content gets during discovery.
         """
         from fastapi import HTTPException
 
@@ -1011,13 +1118,51 @@ def create_app(
         # Store bare URLs for tracking
         if valid_urls:
             ctx.database.save_xhs_observed_urls(valid_urls, page_type)
+            _backfill_xhs_tokens(ctx.database, valid_urls)
 
         # Store rich notes directly into content_cache
         cached = 0
         if notes_raw:
             cached = _cache_xhs_notes(ctx.database, notes_raw, page_type)
+            # Trigger background LLM classification so XHS content gets the
+            # same style_key / topic_group / relevance_score that bilibili
+            # content receives during discovery.  Without this the
+            # recommendation diversity mechanism collapses (all XHS items
+            # share "unknown" style and a single fallback topic token).
+            if cached and ctx.recommendation_engine is not None:
+                asyncio.create_task(_classify_new_pool_items())
 
         return {"ok": True, "accepted": max(len(valid_urls), cached)}
+
+    @app.post("/api/sources/xhs/tokens")
+    def ingest_xhs_tokens(payload: dict[str, Any]) -> dict[str, Any]:
+        """Ingest ``(note_id, xsec_token)`` pairs harvested by the MAIN-
+        world fetch sniffer inside ``dist/main/xhs-token-sniffer.js``.
+
+        We rebuild the full tokenized URL from each pair and feed it
+        through ``_backfill_xhs_tokens`` so previously-cached bare URLs
+        (the typical search-page-sourced ones) get upgraded in place.
+        Without this, clicking an xhs recommendation trips xhs's 300031
+        access-denied gating because the stored URL lacks xsec_token.
+        """
+        raw = payload.get("pairs", [])
+        if not isinstance(raw, list) or not raw:
+            return {"ok": True, "upgraded": 0}
+        urls: list[str] = []
+        for pair in raw:
+            if not isinstance(pair, dict):
+                continue
+            note_id = str(pair.get("note_id", "") or "").strip()
+            token = str(pair.get("xsec_token", "") or "").strip()
+            # Guard against the noise the sniffer's deep-walk can surface
+            # — e.g. 24-hex ids that aren't notes. The backfill UPDATE is
+            # narrow (bvid match), so the worst case of a false id is a
+            # no-op, but the token must at least be non-empty.
+            if not note_id or not token:
+                continue
+            urls.append(f"{_XHS_URL_PREFIX}explore/{note_id}?xsec_token={token}")
+        upgraded = _backfill_xhs_tokens(ctx.database, urls)
+        return {"ok": True, "upgraded": upgraded}
 
     # ── XHS task queue endpoints (extension dispatcher) ──────────────
 
@@ -1075,6 +1220,7 @@ def create_app(
             ]
             if valid_urls:
                 ctx.database.save_xhs_observed_urls(valid_urls, "task")
+                _backfill_xhs_tokens(ctx.database, valid_urls)
             notes = payload.get("notes", [])
             if notes:
                 _cache_xhs_notes(ctx.database, notes, "task")

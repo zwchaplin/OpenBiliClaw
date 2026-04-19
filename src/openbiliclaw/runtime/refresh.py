@@ -100,6 +100,7 @@ class ContinuousRefreshController:
     discovery_engine: SupportsDiscoveryEngine
     recommendation_engine: SupportsRecommendationEngine
     event_hub: Any | None = None
+    xhs_producer: Any | None = None
     signal_event_threshold: int = 6
     event_refresh_minutes: int = 0
     trending_refresh_hours: int = 3
@@ -108,7 +109,7 @@ class ContinuousRefreshController:
     delight_cooldown_hours: int = 4
     check_interval_seconds: int = 60
     discovery_limit: int = 30
-    pool_target_count: int = 300
+    pool_target_count: int = 600
     _manual_refresh_task: asyncio.Task[None] | None = None
     _manual_refresh_state: str = "idle"
     _manual_refresh_message: str = ""
@@ -296,7 +297,19 @@ class ContinuousRefreshController:
                 await self.refresh_if_needed()
             with suppress(Exception):
                 await self._tick_soul_pipeline()
+            with suppress(Exception):
+                await self._tick_xhs_producer()
             await asyncio.sleep(self.check_interval_seconds)
+
+    async def _tick_xhs_producer(self) -> None:
+        """Invoke the xhs search task producer if one is configured."""
+        producer = self.xhs_producer
+        if producer is None:
+            return
+        produce_fn = getattr(producer, "produce_if_due", None)
+        if not callable(produce_fn):
+            return
+        await produce_fn()
 
     async def _tick_soul_pipeline(self) -> None:
         """Invoke ProfileUpdatePipeline.tick() if the soul engine exposes one.

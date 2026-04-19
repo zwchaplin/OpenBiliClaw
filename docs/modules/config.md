@@ -126,7 +126,7 @@ cp config.example.toml config.toml
 | 键 | 类型 | 默认值 | 说明 |
 |----|------|--------|------|
 | `sidecar_url` | string | `""` | xhs-downloader sidecar 的 HTTP 地址。留空禁用小红书源。Docker compose 自动注入 `OPENBILICLAW_XHS_SIDECAR_URL` 环境变量 |
-| `daily_search_budget` | int | `20` | 每天后端允许入队的 Soul 驱动搜索任务数上限 |
+| `daily_search_budget` | int | `30` | 每天后端允许入队的 Soul 驱动搜索任务数上限。由 `XhsTaskProducer`（`runtime/xhs_producer.py`）在持续刷新循环里使用，搭配内部 4h 最小间隔避免反复抢配额 |
 | `daily_creator_budget` | int | `10` | 每天每位订阅创作者的抓取任务上限 |
 | `task_interval_seconds` | int | `45` | 扩展分发器两次任务之间的最小间隔（秒） |
 
@@ -138,7 +138,7 @@ cp config.example.toml config.toml
 |----|------|--------|------|
 | `enabled` | bool | `true` | 是否启用定时发现 |
 | `discovery_cron` | string | `"0 */4 * * *"` | 发现任务 cron 表达式 |
-| `pool_target_count` | int | `300` | discovery pool 期望保有的可换候选数量；允许范围 `1..300`。运行时会持续补货直到接近该目标，给 popup 连续“换一批”和自动续页留出更充足余量 |
+| `pool_target_count` | int | `600` | discovery pool 期望保有的可换候选数量；允许范围 `1..600`。运行时会持续补货直到接近该目标；到达目标后不再触发新 discover，直到 pool 掉回目标以下再补货 |
 | `account_sync_interval_hours` | int | `6` | 账户侧长期信号同步间隔；运行时会低频拉取 history / favorites / following |
 | `speculation_interval_minutes` | int | `10` | 猜测兴趣推测的运行间隔（分钟） |
 | `speculation_ttl_days` | int | `3` | 猜测兴趣的默认存活天数 |
@@ -165,6 +165,10 @@ cp config.example.toml config.toml
 | `file_level` | string | `"DEBUG"` | 文件日志级别 |
 | `directory` | string | `"logs"` | 日志目录 |
 | `filename` | string | `"openbiliclaw.log"` | 日志文件名 |
+| `max_file_size_mb` | int | `1024` | 单个日志文件上限（MB），超过即轮转；`0` 禁用轮转 |
+| `backup_count` | int | `1` | 保留的历史日志份数；设为 `1` 时总占用封顶 `max_file_size_mb * 2` MB |
+
+启动时如果现有日志文件已经超过 `max_file_size_mb`，会被重命名为 `<filename>.1`（覆盖旧的 `.1`）并重新开始写入——这样意外堆积的大日志不会在下次启动时继续增长。运行时到达上限则由 `RotatingFileHandler` 正常轮转：`app.log` → `app.log.1` → `app.log.2` → …，超出 `backup_count` 的旧份自动丢弃。
 
 ## 环境变量
 

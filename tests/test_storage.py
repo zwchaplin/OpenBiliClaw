@@ -772,6 +772,159 @@ class TestDatabase:
 
             db.close()
 
+    def test_get_recommendations_joins_multi_source_fields(self) -> None:
+        """Regression: get_recommendations must surface content_cache's
+        ``content_url``/``source_platform``/``content_id`` so xhs items
+        don't get rebuilt as bilibili URLs by the popup fallback.
+
+        Previous SELECT only joined title/up_name/cover_url, so every row
+        came back with ``source_platform=""`` (API defaulted to "bilibili")
+        and ``content_url=""`` (popup fell back to
+        ``https://www.bilibili.com/video/<note_id>``), producing broken
+        links that mixed xhs content into the bilibili namespace.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            note_id = "6548fd56000000001e0223b1"
+            tokenized_url = (
+                f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token=ABC="
+            )
+            db.cache_content(
+                bvid=note_id,
+                title="咒术回战复盘",
+                up_name="某老师",
+                cover_url="https://example.com/cover.jpg",
+                source="xhs-extension-search",
+                content_id=note_id,
+                content_url=tokenized_url,
+                source_platform="xiaohongshu",
+                author_name="某老师",
+            )
+            db.insert_recommendation(
+                note_id,
+                confidence=0.9,
+                expression="",
+                topic="",
+                presented=0,
+            )
+
+            rows = db.get_recommendations(limit=10)
+            assert len(rows) == 1
+            row = rows[0]
+            assert row["source_platform"] == "xiaohongshu"
+            assert row["content_url"] == tokenized_url
+            assert row["content_id"] == note_id
+
+            db.close()
+
+    def test_get_recommendations_filters_bare_xhs_rows(self) -> None:
+        """Regression: xhs rows without ``xsec_token`` in ``content_url``
+        must not be surfaced to the UI — clicking them hits xhs's 300031
+        login wall. Bilibili rows and tokenized xhs rows pass through.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            bare_id = "69ccda220000000021005a9b"
+            tokenized_id = "69d26d2e0000000023006c95"
+            bilibili_id = "BV1Xx411c7mD"
+
+            db.cache_content(
+                bvid=bare_id,
+                title="裸 xhs",
+                up_name="a",
+                cover_url="",
+                source="xhs-extension-task",
+                content_id=bare_id,
+                content_url=f"https://www.xiaohongshu.com/explore/{bare_id}",
+                source_platform="xiaohongshu",
+                author_name="a",
+            )
+            db.cache_content(
+                bvid=tokenized_id,
+                title="带 token xhs",
+                up_name="b",
+                cover_url="",
+                source="xhs-extension-task",
+                content_id=tokenized_id,
+                content_url=(
+                    f"https://www.xiaohongshu.com/explore/{tokenized_id}"
+                    "?xsec_token=XYZ="
+                ),
+                source_platform="xiaohongshu",
+                author_name="b",
+            )
+            db.cache_content(
+                bvid=bilibili_id,
+                title="b 站视频",
+                up_name="c",
+                cover_url="",
+                source="bilibili-search",
+                content_id=bilibili_id,
+                content_url=f"https://www.bilibili.com/video/{bilibili_id}",
+                source_platform="bilibili",
+                author_name="c",
+            )
+            for bv in (bare_id, tokenized_id, bilibili_id):
+                db.insert_recommendation(
+                    bv, confidence=0.5, expression="", topic="", presented=0,
+                )
+
+            rows = db.get_recommendations(limit=10)
+            bvids = {r["bvid"] for r in rows}
+            assert bare_id not in bvids
+            assert tokenized_id in bvids
+            assert bilibili_id in bvids
+
+            db.close()
+
+    def test_get_pool_candidates_filters_bare_xhs_rows(self) -> None:
+        """Regression: ranking pool must exclude bare xhs rows too, so the
+        engine never promotes them into recommendations in the first place.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            bare_id = "69ccda220000000021005a9b"
+            tokenized_id = "69d26d2e0000000023006c95"
+
+            db.cache_content(
+                bvid=bare_id,
+                title="bare",
+                up_name="",
+                cover_url="",
+                source="xhs-extension-task",
+                content_id=bare_id,
+                content_url=f"https://www.xiaohongshu.com/explore/{bare_id}",
+                source_platform="xiaohongshu",
+                author_name="",
+            )
+            db.cache_content(
+                bvid=tokenized_id,
+                title="tokenized",
+                up_name="",
+                cover_url="",
+                source="xhs-extension-task",
+                content_id=tokenized_id,
+                content_url=(
+                    f"https://www.xiaohongshu.com/explore/{tokenized_id}"
+                    "?xsec_token=XYZ="
+                ),
+                source_platform="xiaohongshu",
+                author_name="",
+            )
+
+            rows = db.get_pool_candidates(limit=10)
+            bvids = {r["bvid"] for r in rows}
+            assert bare_id not in bvids
+            assert tokenized_id in bvids
+
+            db.close()
+
     def test_insert_recommendation_retries_when_database_is_locked(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db = Database(Path(tmpdir) / "test.db")

@@ -60,7 +60,7 @@
 <div class="diagram-section">
 <div class="section-title">1. 统一推荐管道 &mdash; serve() 从池中自主拣选</div>
 
-<svg width="1140" height="920" viewBox="0 0 1140 920">
+<svg width="1140" height="1000" viewBox="0 0 1140 1000">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
             markerWidth="7" markerHeight="7" orient="auto-start-auto">
@@ -117,96 +117,104 @@
   <rect x="250" y="240" width="460" height="35" rx="6" fill="#1a1a24" stroke="#8b949e" stroke-width="1.5"/>
   <text x="480" y="262" text-anchor="middle" fill="#8b949e" font-size="12" font-weight="600">1. _load_pool_candidates(limit * multiplier)</text>
 
-  <line x1="480" y1="275" x2="480" y2="300" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="480" y1="275" x2="480" y2="295" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 1.5: classify_pool_backlog safety net -->
+  <rect x="250" y="300" width="460" height="35" rx="6" fill="#1a1208" stroke="#f0883e" stroke-width="1.5"/>
+  <text x="480" y="322" text-anchor="middle" fill="#f0883e" font-size="12" font-weight="600">1b. classify_pool_backlog() (safety net, no-op if all classified)</text>
+
+  <line x1="480" y1="335" x2="480" y2="355" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
 
   <!-- Step 2: Filter -->
-  <rect x="250" y="305" width="460" height="35" rx="6" fill="#161b22" stroke="#484f58" stroke-width="1.5"/>
-  <text x="480" y="327" text-anchor="middle" fill="#c9d1d9" font-size="12">2. 过滤 excluded_bvids + _exclude_recently_viewed</text>
+  <rect x="250" y="360" width="460" height="35" rx="6" fill="#161b22" stroke="#484f58" stroke-width="1.5"/>
+  <text x="480" y="382" text-anchor="middle" fill="#c9d1d9" font-size="12">2. 过滤 excluded_bvids + _exclude_recently_viewed</text>
 
-  <line x1="480" y1="340" x2="480" y2="370" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="480" y1="395" x2="480" y2="425" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
 
   <!-- Step 3: PoolCurator scoring (NEW!) -->
-  <rect x="130" y="375" width="580" height="130" rx="10" fill="#1e1028" stroke="#f778ba" stroke-width="2"/>
-  <text x="420" y="398" text-anchor="middle" fill="#f778ba" font-size="14" font-weight="700">3. PoolCurator.score_candidates() &mdash; 推荐侧二次评分</text>
+  <rect x="130" y="430" width="580" height="130" rx="10" fill="#1e1028" stroke="#f778ba" stroke-width="2"/>
+  <text x="420" y="453" text-anchor="middle" fill="#f778ba" font-size="14" font-weight="700">3. PoolCurator.score_candidates() &mdash; 推荐侧二次评分</text>
 
-  <rect x="150" y="410" width="250" height="40" rx="4" fill="#161b22" stroke="#f778ba" stroke-width="1"/>
-  <text x="275" y="428" text-anchor="middle" fill="#f778ba" font-size="10" font-weight="600">build_context()</text>
-  <text x="275" y="442" text-anchor="middle" fill="#8b949e" font-size="9">recent_topic_keys / sources / feedback</text>
+  <rect x="150" y="465" width="250" height="40" rx="4" fill="#161b22" stroke="#f778ba" stroke-width="1"/>
+  <text x="275" y="483" text-anchor="middle" fill="#f778ba" font-size="10" font-weight="600">build_context()</text>
+  <text x="275" y="497" text-anchor="middle" fill="#8b949e" font-size="9">recent_topic_keys / sources / feedback</text>
 
-  <rect x="420" y="410" width="270" height="40" rx="4" fill="#161b22" stroke="#f778ba" stroke-width="1"/>
-  <text x="555" y="428" text-anchor="middle" fill="#f778ba" font-size="10" font-weight="600">score_candidates()</text>
-  <text x="555" y="442" text-anchor="middle" fill="#8b949e" font-size="9">&rarr; dict[bvid, rec_score]</text>
+  <rect x="420" y="465" width="270" height="40" rx="4" fill="#161b22" stroke="#f778ba" stroke-width="1"/>
+  <text x="555" y="483" text-anchor="middle" fill="#f778ba" font-size="10" font-weight="600">score_candidates()</text>
+  <text x="555" y="497" text-anchor="middle" fill="#8b949e" font-size="9">&rarr; dict[bvid, rec_score]</text>
 
-  <text x="420" y="482" text-anchor="middle" fill="#f778ba" font-size="10">rec_score = 0.4&times;relevance + 0.2&times;freshness - 0.15&times;topic_fatigue - 0.15&times;source_monotony + 0.1&times;serendipity &plusmn; feedback</text>
+  <text x="420" y="537" text-anchor="middle" fill="#f778ba" font-size="10">rec_score = 0.4&times;relevance + 0.2&times;freshness - 0.15&times;topic_fatigue - 0.15&times;source_monotony + 0.1&times;serendipity &plusmn; feedback</text>
 
-  <line x1="420" y1="505" x2="420" y2="535" stroke="#f778ba" stroke-width="1.5" marker-end="url(#arrow-pink)"/>
+  <line x1="420" y1="560" x2="420" y2="590" stroke="#f778ba" stroke-width="1.5" marker-end="url(#arrow-pink)"/>
 
   <!-- Step 4: Diversified batch -->
-  <rect x="130" y="540" width="580" height="80" rx="10" fill="#0d2818" stroke="#3fb950" stroke-width="2"/>
-  <text x="420" y="563" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600">4. _select_diversified_batch(score_override=rec_scores)</text>
-  <text x="420" y="583" text-anchor="middle" fill="#8b949e" font-size="10">按 rec_score 排序 (而非原始 relevance_score)</text>
-  <text x="420" y="600" text-anchor="middle" fill="#8b949e" font-size="10">3 维多样性控制: topic_cap + style_cap + source_cap + 4 轮渐进宽松</text>
+  <rect x="130" y="595" width="580" height="95" rx="10" fill="#0d2818" stroke="#3fb950" stroke-width="2"/>
+  <text x="420" y="618" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600">4. _select_diversified_batch(score_override=rec_scores)</text>
+  <text x="420" y="638" text-anchor="middle" fill="#8b949e" font-size="10">按 rec_score 排序 (而非原始 relevance_score)</text>
+  <text x="420" y="655" text-anchor="middle" fill="#8b949e" font-size="10">源无关：仅看 topic / style / broad_topic，不看 platform</text>
+  <text x="420" y="672" text-anchor="middle" fill="#8b949e" font-size="10">_diversity_tokens = author + title keywords (无 source_strategy fallback)</text>
 
-  <line x1="420" y1="620" x2="420" y2="650" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <line x1="420" y1="690" x2="420" y2="720" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arrow-green)"/>
 
   <!-- Step 5: Expression -->
-  <rect x="130" y="655" width="580" height="70" rx="10" fill="#161b22" stroke="#484f58" stroke-width="1.5"/>
-  <text x="420" y="678" text-anchor="middle" fill="#c9d1d9" font-size="13" font-weight="600">5. Expression 分支</text>
-  <rect x="150" y="695" width="250" height="24" rx="3" fill="#0d2818" stroke="#3fb950" stroke-width="1"/>
-  <text x="275" y="711" text-anchor="middle" fill="#3fb950" font-size="10">precomputed: pool_expression (0 LLM)</text>
-  <rect x="420" y="695" width="270" height="24" rx="3" fill="#1a1208" stroke="#f0883e" stroke-width="1"/>
-  <text x="555" y="711" text-anchor="middle" fill="#f0883e" font-size="10">realtime: LLM generate_expression (N calls)</text>
-
-  <line x1="420" y1="725" x2="420" y2="755" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
-
-  <!-- Step 6: Persist -->
-  <rect x="250" y="760" width="340" height="35" rx="6" fill="#1a1a24" stroke="#8b949e" stroke-width="1.5"/>
-  <text x="420" y="782" text-anchor="middle" fill="#8b949e" font-size="12">6. DB: insert_recommendation + mark_pool_shown</text>
+  <rect x="130" y="725" width="580" height="70" rx="10" fill="#161b22" stroke="#484f58" stroke-width="1.5"/>
+  <text x="420" y="748" text-anchor="middle" fill="#c9d1d9" font-size="13" font-weight="600">5. Expression 分支</text>
+  <rect x="150" y="765" width="250" height="24" rx="3" fill="#0d2818" stroke="#3fb950" stroke-width="1"/>
+  <text x="275" y="781" text-anchor="middle" fill="#3fb950" font-size="10">precomputed: pool_expression (0 LLM)</text>
+  <rect x="420" y="765" width="270" height="24" rx="3" fill="#1a1208" stroke="#f0883e" stroke-width="1"/>
+  <text x="555" y="781" text-anchor="middle" fill="#f0883e" font-size="10">realtime: LLM generate_expression (N calls)</text>
 
   <line x1="420" y1="795" x2="420" y2="825" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
 
+  <!-- Step 6: Persist -->
+  <rect x="250" y="830" width="340" height="35" rx="6" fill="#1a1a24" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="420" y="852" text-anchor="middle" fill="#8b949e" font-size="12">6. DB: insert_recommendation + mark_pool_shown</text>
+
+  <line x1="420" y1="865" x2="420" y2="895" stroke="#484f58" stroke-width="1.5" marker-end="url(#arrow)"/>
+
   <!-- Output -->
-  <rect x="300" y="830" width="240" height="30" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
-  <text x="420" y="850" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="600">list[Recommendation]</text>
+  <rect x="300" y="900" width="240" height="30" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="420" y="920" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="600">list[Recommendation]</text>
 
   <!-- ── Side: Curator detail ── -->
-  <rect x="800" y="375" width="300" height="300" rx="10" fill="#1e1028" stroke="#f778ba" stroke-width="1.5"/>
-  <text x="950" y="398" text-anchor="middle" fill="#f778ba" font-size="13" font-weight="700">PoolCurator (推荐侧管家)</text>
-  <line x1="815" y1="408" x2="1085" y2="408" stroke="#30363d" stroke-width="1"/>
-  <text x="950" y="428" text-anchor="middle" fill="#c9d1d9" font-size="10" font-weight="600">ScoringWeights (frozen)</text>
-  <text x="950" y="445" text-anchor="middle" fill="#8b949e" font-size="9">relevance=0.40 / freshness=0.20</text>
-  <text x="950" y="458" text-anchor="middle" fill="#8b949e" font-size="9">topic_fatigue=0.15 / source_monotony=0.15</text>
-  <text x="950" y="471" text-anchor="middle" fill="#8b949e" font-size="9">serendipity=0.10</text>
-  <line x1="815" y1="480" x2="1085" y2="480" stroke="#30363d" stroke-width="1"/>
-  <text x="950" y="498" text-anchor="middle" fill="#c9d1d9" font-size="10" font-weight="600">Scoring Components</text>
-  <text x="950" y="515" text-anchor="middle" fill="#8b949e" font-size="9">_freshness_score(): sigmoid decay, half-life 3d</text>
-  <text x="950" y="530" text-anchor="middle" fill="#8b949e" font-size="9">_topic_fatigue(): recent N recs same topic</text>
-  <text x="950" y="545" text-anchor="middle" fill="#8b949e" font-size="9">_source_monotony(): recent N recs same source</text>
-  <text x="950" y="560" text-anchor="middle" fill="#8b949e" font-size="9">_serendipity_bonus(): explore=1.0, else 0</text>
-  <line x1="815" y1="570" x2="1085" y2="570" stroke="#30363d" stroke-width="1"/>
-  <text x="950" y="588" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">FeedbackSignals</text>
-  <text x="950" y="605" text-anchor="middle" fill="#8b949e" font-size="9">dislike UP &rarr; -0.20 / dislike topic &rarr; -0.10 / like &rarr; +0.05</text>
+  <rect x="800" y="430" width="300" height="300" rx="10" fill="#1e1028" stroke="#f778ba" stroke-width="1.5"/>
+  <text x="950" y="453" text-anchor="middle" fill="#f778ba" font-size="13" font-weight="700">PoolCurator (推荐侧管家)</text>
+  <line x1="815" y1="463" x2="1085" y2="463" stroke="#30363d" stroke-width="1"/>
+  <text x="950" y="483" text-anchor="middle" fill="#c9d1d9" font-size="10" font-weight="600">ScoringWeights (frozen)</text>
+  <text x="950" y="500" text-anchor="middle" fill="#8b949e" font-size="9">relevance=0.40 / freshness=0.20</text>
+  <text x="950" y="513" text-anchor="middle" fill="#8b949e" font-size="9">topic_fatigue=0.15 / source_monotony=0.15</text>
+  <text x="950" y="526" text-anchor="middle" fill="#8b949e" font-size="9">serendipity=0.10</text>
+  <line x1="815" y1="535" x2="1085" y2="535" stroke="#30363d" stroke-width="1"/>
+  <text x="950" y="553" text-anchor="middle" fill="#c9d1d9" font-size="10" font-weight="600">Scoring Components</text>
+  <text x="950" y="570" text-anchor="middle" fill="#8b949e" font-size="9">_freshness_score(): sigmoid decay, half-life 3d</text>
+  <text x="950" y="585" text-anchor="middle" fill="#8b949e" font-size="9">_topic_fatigue(): recent N recs same topic</text>
+  <text x="950" y="600" text-anchor="middle" fill="#8b949e" font-size="9">_source_monotony(): recent N recs same source</text>
+  <text x="950" y="615" text-anchor="middle" fill="#8b949e" font-size="9">_serendipity_bonus(): explore=1.0, else 0</text>
+  <line x1="815" y1="625" x2="1085" y2="625" stroke="#30363d" stroke-width="1"/>
+  <text x="950" y="643" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">FeedbackSignals</text>
+  <text x="950" y="660" text-anchor="middle" fill="#8b949e" font-size="9">dislike UP &rarr; -0.20 / dislike topic &rarr; -0.10 / like &rarr; +0.05</text>
 
-  <line x1="815" y1="615" x2="1085" y2="615" stroke="#30363d" stroke-width="1"/>
-  <text x="950" y="632" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">多源混排 (NEW)</text>
-  <text x="950" y="648" text-anchor="middle" fill="#8b949e" font-size="9">source_monotony 惩罚同源连续推荐</text>
-  <text x="950" y="663" text-anchor="middle" fill="#8b949e" font-size="9">bilibili + xiaohongshu 按 platform_mix 交叉</text>
+  <line x1="815" y1="670" x2="1085" y2="670" stroke="#30363d" stroke-width="1"/>
+  <text x="950" y="687" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">多源混排</text>
+  <text x="950" y="703" text-anchor="middle" fill="#8b949e" font-size="9">source_monotony 惩罚同源连续推荐</text>
+  <text x="950" y="718" text-anchor="middle" fill="#8b949e" font-size="9">bilibili + xiaohongshu 按 platform_mix 交叉</text>
 
-  <line x1="800" y1="475" x2="712" y2="440" stroke="#f778ba" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="800" y1="530" x2="712" y2="495" stroke="#f778ba" stroke-width="1" stroke-dasharray="4,3"/>
 
   <!-- ── Side: Wrapper methods ── -->
-  <rect x="800" y="655" width="300" height="120" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.5"/>
-  <text x="950" y="678" text-anchor="middle" fill="#bc8cff" font-size="12" font-weight="600">Thin Wrappers &rarr; serve()</text>
-  <line x1="815" y1="688" x2="1085" y2="688" stroke="#30363d" stroke-width="1"/>
-  <text x="950" y="708" text-anchor="middle" fill="#c9d1d9" font-size="9">generate_recommendations(discovered=ignored) &rarr; serve(mode=realtime)</text>
-  <text x="950" y="725" text-anchor="middle" fill="#c9d1d9" font-size="9">reshuffle_recommendations() &rarr; serve(mode=precomputed)</text>
-  <text x="950" y="742" text-anchor="middle" fill="#c9d1d9" font-size="9">append_recommendations(excluded) &rarr; serve(excluded, mode=precomputed)</text>
-  <text x="950" y="762" text-anchor="middle" fill="#8b949e" font-size="9">discovered 参数已废弃，引擎始终从 pool 自主拣选</text>
+  <rect x="800" y="740" width="300" height="120" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="950" y="763" text-anchor="middle" fill="#bc8cff" font-size="12" font-weight="600">Thin Wrappers &rarr; serve()</text>
+  <line x1="815" y1="773" x2="1085" y2="773" stroke="#30363d" stroke-width="1"/>
+  <text x="950" y="793" text-anchor="middle" fill="#c9d1d9" font-size="9">generate_recommendations(discovered=ignored) &rarr; serve(mode=realtime)</text>
+  <text x="950" y="810" text-anchor="middle" fill="#c9d1d9" font-size="9">reshuffle_recommendations() &rarr; serve(mode=precomputed)</text>
+  <text x="950" y="827" text-anchor="middle" fill="#c9d1d9" font-size="9">append_recommendations(excluded) &rarr; serve(excluded, mode=precomputed)</text>
+  <text x="950" y="847" text-anchor="middle" fill="#8b949e" font-size="9">discovered 参数已废弃，引擎始终从 pool 自主拣选</text>
 
   <!-- Summary -->
-  <rect x="30" y="875" width="1080" height="35" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-  <text x="60" y="892" fill="#f778ba" font-size="11" font-weight="600">关键变化:</text>
-  <text x="140" y="892" fill="#8b949e" font-size="10">排序用 PoolCurator rec_score (时效/疲劳/反馈/探索) · 多源内容混排 (bilibili + xiaohongshu) · LLM prompt 源感知</text>
+  <rect x="30" y="945" width="1080" height="45" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <text x="60" y="960" fill="#f778ba" font-size="11" font-weight="600">关键变化:</text>
+  <text x="140" y="960" fill="#8b949e" font-size="10">classify_pool_backlog 安全网确保所有内容已分类 · 多样性控制源无关 (topic/style/broad_topic) · _diversity_tokens 不再 fallback source_strategy</text>
+  <text x="140" y="978" fill="#8b949e" font-size="10">排序用 PoolCurator rec_score (时效/疲劳/反馈/探索) · 多源内容混排 (bilibili + xiaohongshu) · cache_content COALESCE 保护已分类字段</text>
 </svg>
 </div>
 
@@ -251,26 +259,38 @@
   <text x="270" y="188" text-anchor="middle" fill="#484f58" font-size="10">三条路径 (generate/reshuffle/append) 大量重复逻辑</text>
 
   <!-- ═════ After (new) ═════ -->
-  <rect x="560" y="20" width="560" height="200" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
-  <text x="840" y="48" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600">After (解耦)</text>
+  <rect x="560" y="20" width="560" height="210" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="840" y="48" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600">After (解耦 + 多源)</text>
 
   <!-- Discovery cycle -->
-  <rect x="580" y="65" width="230" height="55" rx="6" fill="#0d2818" stroke="#3fb950" stroke-width="1"/>
-  <text x="695" y="85" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600">Discovery Cycle (独立)</text>
-  <text x="695" y="100" text-anchor="middle" fill="#8b949e" font-size="9">discover() &rarr; 入池 &rarr; precompute_pool_copy &rarr; evict_stale</text>
+  <rect x="580" y="62" width="170" height="50" rx="6" fill="#0d2818" stroke="#3fb950" stroke-width="1"/>
+  <text x="665" y="80" text-anchor="middle" fill="#3fb950" font-size="10" font-weight="600">Discovery (Bilibili)</text>
+  <text x="665" y="95" text-anchor="middle" fill="#8b949e" font-size="8">discover() &rarr; 入池</text>
+
+  <!-- XHS Extension source -->
+  <rect x="760" y="62" width="160" height="50" rx="6" fill="#2a0d0d" stroke="#da3633" stroke-width="1"/>
+  <text x="840" y="80" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">XHS Extension</text>
+  <text x="840" y="95" text-anchor="middle" fill="#8b949e" font-size="8">_cache_xhs_notes() &rarr; 入池</text>
+
+  <!-- classify_pool_backlog gate -->
+  <rect x="630" y="120" width="260" height="30" rx="6" fill="#1a1208" stroke="#f0883e" stroke-width="1.5"/>
+  <text x="760" y="140" text-anchor="middle" fill="#f0883e" font-size="10" font-weight="600">classify_pool_backlog() (源无关门)</text>
+
+  <line x1="665" y1="112" x2="700" y2="118" stroke="#3fb950" stroke-width="1" marker-end="url(#arr2)"/>
+  <line x1="840" y1="112" x2="820" y2="118" stroke="#da3633" stroke-width="1" marker-end="url(#arr2)"/>
 
   <!-- Recommendation cycle -->
-  <rect x="850" y="65" width="250" height="55" rx="6" fill="#1c1536" stroke="#bc8cff" stroke-width="1"/>
-  <text x="975" y="85" text-anchor="middle" fill="#bc8cff" font-size="11" font-weight="600">Recommendation Cycle (独立)</text>
-  <text x="975" y="100" text-anchor="middle" fill="#8b949e" font-size="9">serve() &rarr; Curator 评分 &rarr; 多样性 &rarr; 投递</text>
+  <rect x="930" y="62" width="180" height="50" rx="6" fill="#1c1536" stroke="#bc8cff" stroke-width="1"/>
+  <text x="1020" y="80" text-anchor="middle" fill="#bc8cff" font-size="10" font-weight="600">Recommendation (独立)</text>
+  <text x="1020" y="95" text-anchor="middle" fill="#8b949e" font-size="8">serve() &rarr; Curator &rarr; 投递</text>
 
   <!-- Pool in between -->
-  <rect x="740" y="135" width="120" height="30" rx="6" fill="#1a1a24" stroke="#8b949e" stroke-width="1"/>
-  <text x="800" y="155" text-anchor="middle" fill="#8b949e" font-size="11">Pool (解耦点)</text>
-  <line x1="695" y1="120" x2="740" y2="148" stroke="#3fb950" stroke-width="1" marker-end="url(#arr2)"/>
-  <line x1="860" y1="148" x2="975" y2="120" stroke="#bc8cff" stroke-width="1" marker-end="url(#arr2)"/>
+  <rect x="700" y="158" width="120" height="30" rx="6" fill="#1a1a24" stroke="#8b949e" stroke-width="1"/>
+  <text x="760" y="178" text-anchor="middle" fill="#8b949e" font-size="11">Pool (解耦点)</text>
+  <line x1="760" y1="150" x2="760" y2="156" stroke="#f0883e" stroke-width="1" marker-end="url(#arr2)"/>
+  <line x1="820" y1="172" x2="930" y2="95" stroke="#bc8cff" stroke-width="1" marker-end="url(#arr2)"/>
 
-  <text x="840" y="195" text-anchor="middle" fill="#3fb950" font-size="10">Pool 水位低 &rarr; Curator 自动触发 Discovery 补货</text>
+  <text x="840" y="208" text-anchor="middle" fill="#3fb950" font-size="10">Pool 水位低 &rarr; Curator 自动触发 Discovery 补货</text>
 
   <!-- ═════ Decoupled data flow ═════ -->
 
@@ -278,9 +298,14 @@
   <text x="570" y="278" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="700">解耦后的数据流</text>
 
   <!-- Discovery side -->
-  <rect x="40" y="300" width="160" height="40" rx="6" fill="#0d2818" stroke="#3fb950" stroke-width="1.5"/>
-  <text x="120" y="324" text-anchor="middle" fill="#3fb950" font-size="11">Discovery</text>
-  <line x1="200" y1="320" x2="250" y2="320" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr2)"/>
+  <rect x="40" y="290" width="160" height="40" rx="6" fill="#0d2818" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="120" y="314" text-anchor="middle" fill="#3fb950" font-size="11">Discovery</text>
+  <line x1="200" y1="310" x2="250" y2="315" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+  <!-- XHS Extension source -->
+  <rect x="40" y="340" width="160" height="40" rx="6" fill="#2a0d0d" stroke="#da3633" stroke-width="1.5"/>
+  <text x="120" y="364" text-anchor="middle" fill="#da3633" font-size="11">XHS Extension</text>
+  <line x1="200" y1="360" x2="250" y2="340" stroke="#da3633" stroke-width="1.5" marker-end="url(#arr2)"/>
 
   <!-- Pool -->
   <rect x="255" y="295" width="200" height="50" rx="6" fill="#1a1a24" stroke="#8b949e" stroke-width="2"/>
@@ -373,10 +398,11 @@
 
   <!-- Internal -->
   <rect x="545" y="110" width="240" height="80" rx="6" fill="#0d2818" stroke="#3fb950" stroke-width="1"/>
-  <text x="665" y="130" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600">Diversification</text>
-  <text x="665" y="148" text-anchor="middle" fill="#8b949e" font-size="8">_select_diversified_batch(score_override)</text>
-  <text x="665" y="162" text-anchor="middle" fill="#8b949e" font-size="8">topic_cap + style_cap + source_cap</text>
-  <text x="665" y="176" text-anchor="middle" fill="#8b949e" font-size="8">4-pass progressive relaxation</text>
+  <text x="665" y="128" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600">Diversification</text>
+  <text x="665" y="143" text-anchor="middle" fill="#8b949e" font-size="8">_select_diversified_batch(score_override)</text>
+  <text x="665" y="156" text-anchor="middle" fill="#8b949e" font-size="8">topic_cap + style_cap (源无关)</text>
+  <text x="665" y="169" text-anchor="middle" fill="#8b949e" font-size="8">4-pass progressive relaxation</text>
+  <text x="665" y="182" text-anchor="middle" fill="#f0883e" font-size="8">classify_pool_backlog() safety net</text>
 
   <!-- Expression -->
   <rect x="295" y="200" width="240" height="50" rx="6" fill="#1a1208" stroke="#f0883e" stroke-width="1"/>
@@ -400,11 +426,13 @@
 
   <!-- Protocol -->
   <line x1="295" y1="330" x2="775" y2="330" stroke="#30363d" stroke-width="1"/>
-  <text x="540" y="350" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600">Protocol 依赖</text>
-  <rect x="295" y="358" width="230" height="22" rx="3" fill="#161b22" stroke="#484f58" stroke-width="1"/>
-  <text x="410" y="373" text-anchor="middle" fill="#8b949e" font-size="8">SupportsCoreMemoryTask (LLM)</text>
-  <rect x="540" y="358" width="230" height="22" rx="3" fill="#161b22" stroke="#484f58" stroke-width="1"/>
-  <text x="655" y="373" text-anchor="middle" fill="#8b949e" font-size="8">Database (SQLite: pool + recommendations)</text>
+  <text x="540" y="350" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="600">Protocol 依赖 + 共享定义</text>
+  <rect x="295" y="358" width="155" height="22" rx="3" fill="#161b22" stroke="#484f58" stroke-width="1"/>
+  <text x="372" y="373" text-anchor="middle" fill="#8b949e" font-size="8">SupportsCoreMemoryTask (LLM)</text>
+  <rect x="458" y="358" width="155" height="22" rx="3" fill="#161b22" stroke="#484f58" stroke-width="1"/>
+  <text x="535" y="373" text-anchor="middle" fill="#8b949e" font-size="8">Database (SQLite: pool + recs)</text>
+  <rect x="621" y="358" width="155" height="22" rx="3" fill="#161b22" stroke="#f0883e" stroke-width="1"/>
+  <text x="698" y="373" text-anchor="middle" fill="#f0883e" font-size="8">VALID_STYLE_KEYS (shared w/ Discovery)</text>
 
   <!-- ═════ Right side ═════ -->
   <line x1="805" y1="100" x2="870" y2="60" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr3-blue)"/>

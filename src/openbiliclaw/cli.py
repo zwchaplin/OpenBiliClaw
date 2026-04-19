@@ -1028,10 +1028,157 @@ def profile() -> None:
     )
 
 
-@app.command()
-def discover() -> None:
-    """手动触发内容发现."""
+_BILIBILI_STRATEGY_NAMES = ("search", "trending", "explore", "related_chain")
+
+
+def _normalize_strategy_names(raw: list[str] | None) -> list[str]:
+    """Split comma-separated values and validate strategy names."""
+    if not raw:
+        return []
+    names: list[str] = []
+    for token in raw:
+        for part in token.split(","):
+            name = part.strip()
+            if name:
+                names.append(name)
+    unknown = [n for n in names if n not in _BILIBILI_STRATEGY_NAMES]
+    if unknown:
+        allowed = ", ".join(_BILIBILI_STRATEGY_NAMES)
+        raise typer.BadParameter(
+            f"未知的 Bilibili 策略：{', '.join(unknown)}。可选：{allowed}"
+        )
+    # Preserve first-seen order, drop duplicates.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            deduped.append(name)
+    return deduped
+
+
+def _run_xhs_discovery(*, force: bool) -> None:
+    """Trigger one Soul-driven xhs keyword production cycle."""
+    from openbiliclaw.config import load_config
+    from openbiliclaw.llm.service import LLMService
+    from openbiliclaw.runtime.xhs_producer import XhsTaskProducer
     from openbiliclaw.soul.engine import SoulProfileNotInitializedError
+    from openbiliclaw.sources.xhs_tasks import XhsTaskQueue
+
+    _require_runtime_config()
+    soul_engine = _build_soul_engine()
+    try:
+        asyncio.run(soul_engine.get_profile())
+    except SoulProfileNotInitializedError as exc:
+        _print_status_panel(
+            "warning",
+            "尚未初始化用户画像",
+            "请先执行 `openbiliclaw init` 拉取历史并生成初始画像。",
+        )
+        raise typer.Exit(code=1) from exc
+
+    config = load_config()
+    memory = _build_memory_manager()
+    database = _get_runtime_database()
+    registry = _build_registry()
+    llm_service = LLMService(registry=registry, memory=memory)
+
+    xhs_cfg = getattr(config.sources, "xiaohongshu", None)
+    producer = XhsTaskProducer(
+        task_queue=XhsTaskQueue(database),
+        soul_engine=soul_engine,
+        llm_service=llm_service,
+        enabled=True,
+        daily_budget=int(getattr(xhs_cfg, "daily_search_budget", 30)),
+        min_interval_hours=0 if force else 4,
+    )
+    result = asyncio.run(producer.produce_if_due())
+
+    reason = str(result.get("reason", ""))
+    enqueued = int(cast("int", result.get("enqueued", 0)))
+    attempted = int(cast("int", result.get("attempted", 0)))
+
+    _print_page_title("小红书关键词生产", "已将关键词写入 xhs_tasks，由浏览器扩展在后台抓取")
+    if reason == "ok":
+        _print_key_value_table(
+            "生产摘要",
+            [
+                ("入队关键词数", str(enqueued)),
+                ("尝试关键词数", str(attempted)),
+                ("今日预算", str(int(getattr(xhs_cfg, "daily_search_budget", 30)))),
+                ("节流开关", "已跳过（--force）" if force else "4 小时节流"),
+            ],
+        )
+        return
+
+    messages = {
+        "disabled": ("info", "xhs producer 已禁用", "config.scheduler.enabled = false 时无法触发。"),
+        "throttled": (
+            "info",
+            "距离上次关键词生产不足 4 小时",
+            "可使用 `--force` 忽略节流重新触发。",
+        ),
+        "no_profile": (
+            "warning",
+            "尚未初始化 Soul 画像",
+            "请先执行 `openbiliclaw init` 生成初始画像。",
+        ),
+        "no_keywords": (
+            "info",
+            "本次未产出关键词",
+            "Soul 画像兴趣列表可能为空，或 LLM 返回了空结果。",
+        ),
+    }
+    kind, title, body = messages.get(reason, ("info", "未知状态", reason or "无详细信息"))
+    _print_status_panel(kind, title, body)
+
+
+@app.command()
+def discover(
+    source: str = typer.Option(
+        "bilibili",
+        "--source",
+        "-s",
+        help="触发发现的内容源：bilibili 或 xiaohongshu。",
+        case_sensitive=False,
+    ),
+    strategies: list[str] | None = typer.Option(
+        None,
+        "--strategy",
+        "-S",
+        help=(
+            "Bilibili 策略过滤，可多次传或逗号分隔："
+            "search / trending / explore / related_chain。"
+            "仅在 --source=bilibili 时生效。"
+        ),
+    ),
+    limit: int = typer.Option(30, "--limit", "-n", min=1, help="Bilibili 发现结果条数上限。"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="xiaohongshu：忽略 4 小时节流强制生产一次关键词。",
+    ),
+) -> None:
+    """手动触发内容发现（按来源选择渠道）."""
+    from openbiliclaw.soul.engine import SoulProfileNotInitializedError
+
+    source_normalized = source.strip().lower()
+    if source_normalized == "xiaohongshu":
+        if strategies:
+            _print_status_panel(
+                "info",
+                "--strategy 仅对 Bilibili 生效",
+                "xiaohongshu 渠道走关键词生产流程，已忽略策略过滤。",
+            )
+        _run_xhs_discovery(force=force)
+        return
+
+    if source_normalized != "bilibili":
+        raise typer.BadParameter(
+            f"未知的内容源 `{source}`，当前支持：bilibili、xiaohongshu。"
+        )
+
+    active_strategies = _normalize_strategy_names(strategies)
 
     _require_runtime_config()
     soul_engine = _build_soul_engine()
@@ -1046,9 +1193,18 @@ def discover() -> None:
         raise typer.Exit(code=1) from exc
 
     discovery_engine = _build_discovery_engine()
-    discovered = asyncio.run(discovery_engine.discover(profile_data, limit=30))
+    discovered = asyncio.run(
+        discovery_engine.discover(
+            profile_data,
+            strategies=active_strategies or None,
+            limit=limit,
+        )
+    )
 
-    _print_page_title("本次内容发现", "发现结果预览")
+    subtitle = "发现结果预览"
+    if active_strategies:
+        subtitle += f"（策略：{', '.join(active_strategies)}）"
+    _print_page_title("本次内容发现", subtitle)
     if not discovered:
         _print_status_panel("info", "没有发现到新内容", "当前没有发现到新的可缓存内容。")
         return
@@ -1058,6 +1214,8 @@ def discover() -> None:
         [
             ("发现条数", str(len(discovered))),
             ("缓存状态", "已写入 content_cache"),
+            ("来源", "bilibili"),
+            ("策略", ", ".join(active_strategies) if active_strategies else "全部"),
         ],
     )
     for index, item in enumerate(discovered[:5], start=1):

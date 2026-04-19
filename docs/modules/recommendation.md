@@ -86,7 +86,7 @@ items = await engine.reshuffle_recommendations(
 - 快路径现在不会现场调用 LLM，也不会再给整批卡片写同一个 fallback topic；只消费 pool 里已经预生成好的 `expression/topic_label`
 - 如果某条候选暂时还没预生成好推荐文案，这两个字段会保持为空，交给前端直接隐藏
 - 命中候选后会立即写入 `recommendations` 表，并把对应池子项标记为 `shown`
-- runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，默认目标现在是 `300`，保证 popup 连续“换一批”和自动续页时尽量随时有货
+- runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，默认目标现在是 `600`（上限 `600`）；达到目标后停止 discover，等池子掉回目标以下再补货，保证 popup 连续“换一批”和自动续页时尽量随时有货，同时避免无谓的远端调用
 - refresh 结束后还会顺手压一轮 `explore` 的高风险相邻子簇，避免制造 / 工艺 / 材料、博弈 / 桌游 / 机制这类方向把剩余可换窗口挤成单一口味
 
 ### RecommendationEngine.append_recommendations

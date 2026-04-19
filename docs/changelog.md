@@ -6,6 +6,120 @@
 
 ## M8: 插件后端 API（进行中）
 
+### 修复加入 xhs 后推荐列表出现 xhs 独占轮次，丰富度塌陷
+
+- **症状**：引入小红书内容后，一轮推荐偶尔全是 xhs 笔记——`picked summary` 出现 `{"count":10,"styles":{"unknown":10},"sources":{"xhs-extension-task":10}}`，风格 / 主题 / 平台都单一，用户每次下拉都看到同一类短视频
+- **根因**：`_select_diversified_batch` 的 style cap 依赖 `_style_token` 返回的桶名，但 xhs 笔记普遍 `style_key=""`——空字符串被当成"无 style"直接跳过 style cap 检查。多个 xhs 笔记在主循环和前几档 try_fill 里都能以"空 style"身份堆到同一批次；一旦前面 cascade 没选够，最后一档无条件兜底把所有剩余项全塞进来，就凑出 10/10 xhs 独家场
+- **设计原则**：用户明确要求"任何来源平等视为内容"——不走平台黑白名单，只从内容维度（topic / style）保证丰富度。平台是产地标签，不是歧视依据
+- **修复**（`recommendation/engine.py::_select_diversified_batch`）：
+  1. `_style_token` 把空 `style_key` 映射成 sentinel `"unknown"`——未分类内容参与 per-style cap，和有 style 分类的条目走同一套配额逻辑，不再享受空字符串"免检"
+  2. 最终兜底把原本的无条件硬塞换成"broad-topic 松口径"：`fallback_broad_cap = 2 × broad_cap`。topic 才是内容丰富度的真信号——同一个 broad topic 的条目即使平台 / style 不同也会让用户感到重复。没有 topic 的条目允许通过，避免候选池薄时返回空批次
+  3. 宁可返回小批次（比如 6 条 topic-diverse）也不凑满 10 条单一 topic
+  4. `_build_debug_summary` 加 `platforms` 字段，日志里能直接看 bilibili / xhs 比例——仅做观测，不参与筛选
+- **测试**：
+  - `tests/test_recommendation_engine.py::test_monoculture_pool_capped_by_broad_topic_not_platform`——纯 xhs 同 topic 池 13 条 → 兜底 broad-topic 天花板 6 条
+  - `test_content_diversity_treats_platforms_equally`——xhs + bili 混池各自 topic-rich → 两边都有代表，不再人为限量
+  - `test_pure_bilibili_rich_pool_fills_batch`——纯 bilibili 富池仍填满 limit
+  - `test_reshuffle_recommendations_backfills_to_requested_limit_when_style_is_dominant`——同 style 但不同 topic → backfill 到 limit
+  - 全量 28 passed（recommendation_engine.py）
+
+### MAIN-world sniffer：从 xhs 自己的 API 响应里捞 `xsec_token`
+
+- **动机**：上一轮 token 回填修了"已经见过 token 的 note 能对齐"，但搜索页从头到尾都不走探索流的 note，历史上 `xhs_observed_urls` 根本没存过它的 token。用户点到的 `69c7a7b000000000220030c9` 就属于这类——任何途径都没捞到过 token，点击直接撞 xhs 300031 登录墙
+- **思路**：xhs 的 Web 端自己会拿 token 发 `/api/sns/web/*` 请求，token 就躺在 response JSON 里。劫持 `window.fetch` / `XMLHttpRequest`，扫 response body 里所有 `(note_id, xsec_token)` 对子，回传给后端 backfill
+- **难点**：content script 跑在 isolated world，`window.fetch` 不是页面的 fetch，劫持没用。必须用 MV3 的 `world: "MAIN"` 声明，让脚本和页面共享同一个 realm
+- **实现**：
+  1. `extension/src/main/xhs-token-sniffer.ts`（新文件）：MAIN-world 脚本，wrap `window.fetch` 和 `XMLHttpRequest.prototype.{open,send}`。`extractTokenPairs` 对任意 JSON 做深度优先扫描，认 24-hex `note_id`/`noteId`/`id` + 非空 `xsec_token`/`xsecToken`。读 body 前先 `response.clone()`，不动原始流。安装代码用 `typeof window !== "undefined"` 守护，node 测试可以只导出 `extractTokenPairs` 用
+  2. `extension/manifest.json`：加第二条 `content_scripts` 给 xhs——`world: "MAIN"`、`run_at: "document_start"`，抢在 xhs 自己注入 fetch 之前挂钩
+  3. `extension/src/content/xiaohongshu.ts`：isolated world 里加 `window.addEventListener("message")` bridge，收 `source: "obc-xhs-sniffer"` 的 postMessage 后缓冲 1.5s 去重，再 `chrome.runtime.sendMessage` 到 service worker
+  4. `extension/src/background/service-worker.ts`：`XHS_TOKENS_OBSERVED` 消息 POST 到 `/api/sources/xhs/tokens`
+  5. `api/app.py::ingest_xhs_tokens`：用 sniffed pairs 合成 `https://www.xiaohongshu.com/explore/<id>?xsec_token=<tok>` 走已有的 `_backfill_xhs_tokens` UPDATE 路径——和探索流的回填合一，不走新分支
+- **隐私边界**：sniffer 不改请求、不做指纹采集、不外传任何非 `(note_id, xsec_token)` 字段。这两个值对任何登录态 xhs session 而言都是公开可读的
+- **效果**：用户每逛一次 xhs 任意页面（首页 / 搜索 / 个人页），后台就从 xhs 的 API 响应里自动把可见 note 的 token 收集齐。之前存成裸 URL 的历史数据会逐步被升级成带 token 版，推荐卡点击命中 xhs 登录墙的概率随之下降
+- **测试**：
+  - `extension/tests/xhs-token-sniffer.test.ts`：10 例覆盖 `extractTokenPairs`——flat/nested/arrays/dedupe/camelCase/reject 非 24-hex/reject 空 token/null 入参
+  - `tests/test_api_xhs_ingest.py::TestXhsTokens`：`/api/sources/xhs/tokens` 端点——token 能 backfill 到已入库的 bare cache / 空 pairs noop / malformed pair 被丢
+- **手工验证**：重新 build extension + reload chrome extension 后，随便打开一条 xhs note，后台日志里能看到 `tokens upgraded=N` 出现
+
+### 修复 xhs 笔记分享 URL 丢失 `xsec_token` 导致登录墙拦截
+
+- **症状**：缓存的 xhs `content_url` 绝大多数是裸 `https://www.xiaohongshu.com/explore/<id>`，不带 `xsec_token=...`。DB 抽样 260 条观测 URL 里只有 15 条（全部来自 `explore` 首页）带 token，`search` 页（133 条）/ task 页（92 条）全是裸的。外链分享 / 退出登录后打开都会被 xhs 拦到登录墙
+- **根因**：xhs 搜索结果页的 React 组件把 `xsec_token` 留在组件 props 里，不写入 `<a href>`；内容脚本 `passive.ts::extractXhsNoteUrl` 只能从 href 捞 token——搜索页天然捞不到。笔记详情页的权威 token 其实在 `window.location.search` 里，但原先根本没被读取
+- **修复**：三处联动
+  1. `api/app.py::_pick_best_xhs_url`：`_cache_xhs_notes` 写 `content_url` 前先比较——incoming 有 token 就直接用；否则回查 `xhs_observed_urls`（历史带 token 的观测）和现有 `content_cache` 行，选一个带 token 的回来。这样 xhs 先逛 explore（token 到手）再搜同一条的场景能把 token 对齐过去
+  2. `api/app.py::_backfill_xhs_tokens`：`/api/sources/xhs/observed-urls` 和 `/api/sources/xhs/task-result` 收到带 token 的 URL 时，一次 UPDATE 把 `content_cache` 里同 note_id 的裸 URL 改写成带 token 版——修已存入库的历史裸 URL
+  3. `extension/src/content/xiaohongshu.ts::selfNoteAnchor`：用户直接坐在笔记详情页时，合成一个"自指 anchor"塞进 collector，把 `window.location.href` 里的权威 token 上报给后端。搜索页缺的 token 在用户点进任意一条笔记时立刻补全
+- **测试**：
+  - `tests/test_api_xhs_ingest.py::test_tokenized_url_upgrades_existing_bare_cache_row`——裸 URL 先入库、带 token 的同 note_id 后观测，最终 DB 必须是带 token 版
+  - `tests/test_api_xhs_ingest.py::test_cache_prefers_tokenized_url_from_prior_observation`——先观测带 token，再来裸 URL + `notes` payload，不准回写成裸
+  - 全量 807 passed + 15 skipped
+
+### 修复推荐列表里 xhs 笔记被当成 bilibili 视频打开（URL 错指）
+
+- **症状**：popup 打开 xhs 推荐卡片时跳到 `https://www.bilibili.com/video/<24位 xhs 笔记 ID>`——bilibili 上根本没这条视频，点开 404。xhs 和 bilibili 内容看似"混了"
+- **根因**：`storage/database.py::get_recommendations` 的 SQL 只从 `content_cache` 拉 `title/up_name/cover_url`，**没拉 `content_id`/`content_url`/`source_platform`**。下游 `/api/recommendations` 读到 `source_platform=""` 就按默认兜底成 `"bilibili"`，读到 `content_url=""` 后 popup 的 `buildContentUrl(item)` 又走 `bilibili.com/video/${bvid}` 兜底——xhs 笔记 ID 被硬塞进 bilibili 命名空间
+- **修复**：`get_recommendations` SQL 补上 `c.content_id`、`c.content_url`、`c.source_platform`（`LEFT JOIN content_cache`，xhs / bilibili 通吃）。之前几轮修 `_cache_xhs_notes` / `_cache_results` 写入路径时忽略了"读回推荐"这条链路
+- **测试**：`tests/test_storage.py::test_get_recommendations_joins_multi_source_fields` 守这三字段在 join 之后还能读回；全量 51 passed（storage + xhs ingest）
+
+### 修复 xhs 笔记入库时 `source` 为空、rescore 后 `source_platform` 被覆盖成 `bilibili`
+
+- **两个相互放大的 bug**：
+  1. `api/app.py::_cache_xhs_notes` 传的是 `source_strategy=f"xhs-extension-{page_type}"`，但 `Database.cache_content` 读的是 `source` kwarg，错拼的 key 被 `kwargs.get("source", "")` 默默丢弃——xhs 所有入库笔记 `source` 列永远是 `""`
+  2. `discovery/engine.py::_cache_results` 只透传 `source`，**没透传 `source_platform`/`content_id`/`content_url`/`author_name`**。cache_content 的 upsert 分支 `source_platform = excluded.source_platform` 会把 xhs 行的 `source_platform` 回写成默认值 `"bilibili"`，每次 rescore 过一遍 pool 就被覆盖一次
+- **连锁现象**：DB 里出现 35 行 `source_platform='bilibili'` 但 `bvid` 是 24 字符 xhs 笔记 ID（如 `68580835000000002203315d`）、title 写着"鸡煲复刻 / 杀戮尖塔进阶"的"假 bilibili 行"
+- **修复**：
+  - `api/app.py:972` 把 `source_strategy=` 改成 `source=`，同时注释说明错拼 key 会被静默丢弃的坑
+  - `discovery/engine.py::_cache_results` 额外透传 `source_platform`/`content_id`/`content_url`/`author_name`
+  - 两条读回路径 `_backfill_candidates` 和 `recommendation/engine.py::_rows_to_discovered` 也补上从 DB 行读 `source_platform`/`content_id`/`content_url` 的逻辑（之前读回时也丢字段，导致再入库时又是默认值）
+- **历史数据修正**：一次性 SQL 修 169 行——把 `source_platform='bilibili'` 且 `bvid NOT LIKE 'BV%'` 的 35 行改回 `xiaohongshu`、补齐 `content_id`/`content_url`；把所有 `source=''` 的 xhs 行标为 `xhs-extension-task`
+- **测试**：
+  - `tests/test_api_xhs_ingest.py::test_notes_cache_populates_source_and_platform` 守 cache_content 正确 kwarg
+  - `tests/test_discovery_engine.py::test_discovery_engine_cache_results_preserves_multi_source_fields` 守 rescore 不会把 xhs 行打回 bilibili
+  - 全量 804 passed（之前 802 + 本次 2）
+
+### 修复 xhs 任务 100% 超时（丢失 EXECUTE 握手）
+
+- **症状**：CLI `discover --source xiaohongshu` 入队后，所有 `xhs_tasks` 都在 30s 后被写成 `status=failed`、`error=timeout`，候选池没增加一条小红书笔记
+- **根因**：`extension/src/background/xhs-task-dispatcher.ts` 里 `executeTask()` 只 `chrome.tabs.create` 开了后台标签，从未给内容脚本发 `XHS_TASK_EXECUTE`。内容脚本 `task-executor.ts` 的 `chrome.runtime.onMessage` 监听器永远等不到触发，30s 硬超时必然命中
+- **修复**：`tabs.create` 之后注册一次 `chrome.tabs.onUpdated` 监听，页面 `status === 'complete'` 命中时 `chrome.tabs.sendMessage(tabId, {action: "XHS_TASK_EXECUTE", data: {task_id, type}})` 再立即 `removeListener`（避免 SPA 内再跳转重复发）；`sendMessage` 被拒（内容脚本缺席）时上报 `error="sendMessage_failed"` 而非静默超时；`cleanupTask()` 也清掉残留监听器
+- **测试**：`extension/tests/xhs-task-dispatcher.test.ts` 新增两条 e2e（完整握手 + `sendMessage` 失败路径），手搓 `chrome.tabs` / `fetch` mock，不依赖 jsdom。8 条 dispatcher 测试全绿
+
+### 候选池上限提到 600
+
+- `scheduler.pool_target_count` 默认值从 `300` 提到 `600`，允许范围同步改为 `1..600`
+- 运行时行为保持不变：候选池达到目标后停止 discover，掉回目标以下再触发补货，避免无谓的远端调用
+- 同步更新：`SchedulerConfig` / `RuntimeRefreshController` / API models / popup 设置面板（`min/max/placeholder`）/ 文档 / 相关测试
+
+### 修复推荐卡片封面挤压
+
+- 侧边栏宽屏下 `116px + 1fr` 的两列 grid 叠加 `aspect-ratio: 16/10` 会让封面被拉伸、文字被挤成一条。改回 flex 纵向布局（封面全宽在上、文字在下），和早期版本体验一致
+- 同时把 520px 媒体查询里的 `grid-template-columns` 覆写清掉
+
+### 日志按大小自动轮转
+
+- **避免失控的 7GB 日志文件**：生产中 DEBUG 级别写的 httpcore/httpx tracelog 会把 `logs/openbiliclaw.log` 撑到几个 G。切换到 `logging.handlers.RotatingFileHandler`：单文件到达 `max_file_size_mb` 立刻轮转成 `<filename>.1`，超出 `backup_count` 的老份直接丢弃
+- **启动时清理历史大日志**：光换 handler 不够——`RotatingFileHandler` 不会回头处理已经超标的旧文件。`_enforce_size_budget_once` 在 `configure_logging` 开头检查一次：超过 `max_file_size_mb` 的历史文件会被重命名成 `<filename>.1`（覆盖旧 `.1`）再让 handler 从空文件写起，这正对应用户说的"超过 1G 就清理"
+- **配置**：`[logging]` 新增两字段 `max_file_size_mb`（默认 1024）和 `backup_count`（默认 1）。`max_file_size_mb=0` 退回原来的 `FileHandler`（不轮转）；`backup_count<1` 时同样回退，因为 stdlib 的 RotatingFileHandler 在 `backupCount=0` 时根本不会轮转
+- **磁盘占用上限**：默认配置下 `openbiliclaw.log` + `openbiliclaw.log.1` 合计不超过 ~2GB
+- **测试**：`tests/test_logging_setup.py` 新增 4 个（启用轮转 / size=0 禁用 / 启动时轮转超标文件 / 小文件不动），`tests/test_config.py` 新增 2 个（默认值、TOML 解析）。全量 802 passed
+
+### CLI `discover` 支持按来源 / 策略触发
+
+- `openbiliclaw discover` 增加 `--source {bilibili|xiaohongshu}` / `--strategy search,trending,…` / `--limit` / `--force` 四个选项，允许单独触发某个渠道或 Bilibili 单条策略
+- `--source xiaohongshu` 路径复用 `XhsTaskProducer.produce_if_due()`，`--force` 时 `min_interval_hours=0` 绕过 4 小时节流；结果直接写入 `xhs_tasks` 表交由扩展后台抓取
+- `--source bilibili`（默认）走原 `ContentDiscoveryEngine.discover()`，`--strategy` 透传为 `strategies=[…]`，空值时等价于跑全策略
+- 参数校验：未知 source 或未知 Bilibili 策略名直接 Typer `BadParameter` 退出码 2；xhs 路径上同时传 `--strategy` 会打印友好提示然后忽略
+- 文档：`docs/modules/cli.md` 的 `openbiliclaw discover` 章节重写，给出 B 站单策略 / xhs / `--force` 三个示例
+
+### Soul 驱动 xhs 自动发现（producer 接上）
+
+- **后端 producer 落地**：`runtime/xhs_producer.py` 的 `XhsTaskProducer` 读取 SoulProfile → 调 LLM 改写成小红书风格关键词 → `XhsTaskQueue.enqueue("search", {keyword})`。内置最小间隔（默认 4h）防止反复抢配额；每日预算由 `XhsTaskQueue.enqueue` 强制（`sources.xiaohongshu.daily_search_budget`，默认 30）
+- **LLM 关键词生成**：`sources/xhs_keyword_gen.py` 把 B 站风格的兴趣标签重写成生活化、具象、长尾、带场景的 xhs 查询（避免单字类目词）。JSON 解析走容错路径，LLM 失败即跳过该轮
+- **挂接现有刷新循环**：`ContinuousRefreshController.run_forever` 每轮调用 `_tick_xhs_producer()`，和 bilibili discovery 共用同一调度器，无需额外 cron
+- **闭环打通**：backend producer → `xhs_tasks` 表 → 扩展 `xhs-task-dispatcher` 轮询 → `chrome.tabs.create({active:false})` 后台执行 → `xhs/task-executor`（首屏、不滚动）回传 URLs + 元数据 → `/api/sources/xhs/task-result` 写入 `content_cache`
+- **配置**：`sources.xiaohongshu.daily_search_budget` 默认从 20 提到 30（匹配产品端对 xhs 采样密度的预期）
+- **测试**：`tests/test_xhs_producer.py` 新增 5 个（disabled / 预算截断 / 节流 / 空关键词 / 无画像）。全量 796 passed
+
 ### 小红书安全发现架构 (xhs-safe-discovery)
 
 - **GPL 隔离 sidecar**：`sidecar/xhs-downloader/` 将 GPL-3.0 的 XHS-Downloader 封装在独立 Docker 容器中，通过 HTTP（`POST /xhs/detail`）与主后端通信，避免 GPL 传染。Dockerfile 固定上游 commit `5f9bd54` 确保可复现构建

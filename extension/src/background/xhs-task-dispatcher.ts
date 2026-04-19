@@ -37,6 +37,7 @@ let taskInFlight = false;
 let taskTabId: number | null = null;
 let taskTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let currentTaskId: string | null = null;
+let taskUpdateListener: ((tabId: number, changeInfo: { status?: string }) => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (testable without chrome)
@@ -93,6 +94,10 @@ function cleanupTask(): void {
     clearTimeout(taskTimeoutId);
     taskTimeoutId = null;
   }
+  if (taskUpdateListener !== null) {
+    chrome.tabs.onUpdated.removeListener(taskUpdateListener);
+    taskUpdateListener = null;
+  }
   if (taskTabId !== null) {
     void chrome.tabs.remove(taskTabId).catch(() => {});
     taskTabId = null;
@@ -101,7 +106,7 @@ function cleanupTask(): void {
   taskInFlight = false;
 }
 
-async function executeTask(task: XhsTask): Promise<void> {
+export async function executeTask(task: XhsTask): Promise<void> {
   if (taskInFlight) return;
   taskInFlight = true;
   currentTaskId = task.id;
@@ -121,6 +126,34 @@ async function executeTask(task: XhsTask): Promise<void> {
     cleanupTask();
     return;
   }
+
+  // Once the tab finishes loading, hand off to the content-script executor.
+  // Without this handshake the executor's onMessage listener never fires and
+  // every task eventually trips the 30 s hard timeout.
+  const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
+    if (updatedTabId !== taskTabId || changeInfo.status !== "complete") return;
+    if (currentTaskId !== task.id) return;
+    // Detach immediately so intra-page navigations don't re-trigger the handshake.
+    chrome.tabs.onUpdated.removeListener(listener);
+    if (taskUpdateListener === listener) taskUpdateListener = null;
+    chrome.tabs
+      .sendMessage(updatedTabId, {
+        action: "XHS_TASK_EXECUTE",
+        data: { task_id: task.id, type: task.type },
+      })
+      .catch(() => {
+        if (currentTaskId !== task.id) return;
+        void reportTaskResult({
+          task_id: task.id,
+          urls: [],
+          status: "error",
+          error: "sendMessage_failed",
+        });
+        cleanupTask();
+      });
+  };
+  taskUpdateListener = listener;
+  chrome.tabs.onUpdated.addListener(listener);
 
   // Hard timeout — forcibly close if content script doesn't respond in time.
   taskTimeoutId = setTimeout(() => {

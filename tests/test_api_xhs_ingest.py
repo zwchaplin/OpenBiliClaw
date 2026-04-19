@@ -117,3 +117,217 @@ class TestXhsObservedUrls:
         assert len(rows) >= 1
         assert rows[0]["url"] == "https://www.xiaohongshu.com/explore/abc123"
         assert rows[0]["page_type"] == "search"
+
+    def test_notes_cache_populates_source_and_platform(
+        self, app_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Regression: xhs note caches must tag `source` (strategy label)
+        AND `source_platform='xiaohongshu'`.
+
+        An earlier bug passed the wrong kwarg (`source_strategy=` instead of
+        `source=`) to `cache_content`, silently dropping the label. Paired
+        with the engine re-cache path that omitted `source_platform`, this
+        let xhs rows end up with `source=''` and `source_platform='bilibili'`
+        after the first rescore pass.
+        """
+        from openbiliclaw.storage.database import Database
+
+        db = Database(tmp_path / "test.db")
+        db.initialize()
+
+        response = app_client.post(
+            "/api/sources/xhs/observed-urls",
+            json={
+                "urls": ["https://www.xiaohongshu.com/explore/note-xyz-001"],
+                "notes": [
+                    {
+                        "url": "https://www.xiaohongshu.com/explore/note-xyz-001",
+                        "title": "手冲咖啡入门",
+                        "author": "豆子老师",
+                        "cover_url": "https://example.com/cover.jpg",
+                    }
+                ],
+                "page_type": "search",
+            },
+        )
+        assert response.status_code == 200
+
+        row = db.conn.execute(
+            "SELECT source, source_platform, content_id, content_url, title, up_name "
+            "FROM content_cache WHERE bvid=?",
+            ("note-xyz-001",),
+        ).fetchone()
+        assert row is not None, "xhs note was not cached"
+        assert row["source"] == "xhs-extension-search"
+        assert row["source_platform"] == "xiaohongshu"
+        assert row["content_id"] == "note-xyz-001"
+        assert row["content_url"].endswith("/note-xyz-001")
+        assert row["title"] == "手冲咖啡入门"
+        assert row["up_name"] == "豆子老师"
+
+    def test_tokenized_url_upgrades_existing_bare_cache_row(
+        self, app_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Regression: when the extension reports a note URL *with*
+        ``xsec_token`` after the same note was already cached from a
+        search page *without* the token, the cache row must be upgraded.
+
+        Without this backfill, users click recommendation cards and get
+        dead-ended at xhs's login wall because the stored URL is missing
+        the access token xhs requires for outbound sharing.
+        """
+        from openbiliclaw.storage.database import Database
+
+        db = Database(tmp_path / "test.db")
+        db.initialize()
+
+        note_id = "note-upgrade-001"
+        bare_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+        tokenized = f"{bare_url}?xsec_token=ABCXYZ123=&xsec_source=pc_feed"
+
+        # First pass: search page sees the bare URL only
+        resp1 = app_client.post(
+            "/api/sources/xhs/observed-urls",
+            json={
+                "urls": [bare_url],
+                "notes": [
+                    {"url": bare_url, "title": "t", "author": "a", "cover_url": ""}
+                ],
+                "page_type": "search",
+            },
+        )
+        assert resp1.status_code == 200
+
+        row = db.conn.execute(
+            "SELECT content_url FROM content_cache WHERE bvid=?", (note_id,)
+        ).fetchone()
+        assert row["content_url"] == bare_url  # bare URL cached
+
+        # Second pass: explore feed observes the same note WITH a token.
+        # No new `notes` payload — just the bare URL list carrying the token.
+        resp2 = app_client.post(
+            "/api/sources/xhs/observed-urls",
+            json={"urls": [tokenized], "page_type": "explore"},
+        )
+        assert resp2.status_code == 200
+
+        row = db.conn.execute(
+            "SELECT content_url FROM content_cache WHERE bvid=?", (note_id,)
+        ).fetchone()
+        assert "xsec_token=ABCXYZ123" in row["content_url"], (
+            f"token backfill failed: still cached as {row['content_url']!r}"
+        )
+
+    def test_cache_prefers_tokenized_url_from_prior_observation(
+        self, app_client: TestClient, tmp_path: Path
+    ) -> None:
+        """Regression: if we previously observed a tokenized URL for a
+        note (e.g. from the explore feed), and a later `notes` payload
+        arrives with a bare URL for the same note (from search results),
+        the cache must keep/write the tokenized URL rather than overwriting
+        with the bare one.
+        """
+        from openbiliclaw.storage.database import Database
+
+        db = Database(tmp_path / "test.db")
+        db.initialize()
+
+        note_id = "note-prefer-002"
+        bare_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+        tokenized = f"{bare_url}?xsec_token=PRIOR456=&xsec_source="
+
+        # Prime: explore feed observed a tokenized URL first (no notes yet).
+        app_client.post(
+            "/api/sources/xhs/observed-urls",
+            json={"urls": [tokenized], "page_type": "explore"},
+        )
+
+        # Now search page reports `notes` with a bare URL for the same note.
+        resp = app_client.post(
+            "/api/sources/xhs/observed-urls",
+            json={
+                "urls": [bare_url],
+                "notes": [
+                    {"url": bare_url, "title": "t2", "author": "a2", "cover_url": ""}
+                ],
+                "page_type": "search",
+            },
+        )
+        assert resp.status_code == 200
+
+        row = db.conn.execute(
+            "SELECT content_url FROM content_cache WHERE bvid=?", (note_id,)
+        ).fetchone()
+        assert "xsec_token=PRIOR456" in row["content_url"], (
+            f"cache overwrote tokenized URL with bare: {row['content_url']!r}"
+        )
+
+
+class TestXhsTokens:
+    """Regression tests for POST /api/sources/xhs/tokens.
+
+    The MAIN-world sniffer discovers ``(note_id, xsec_token)`` pairs from
+    xhs's own API responses and POSTs them here so cached bare URLs can
+    be upgraded to tokenized URLs that xhs will accept for outbound
+    sharing.
+    """
+
+    def test_backfills_token_onto_existing_bare_cache(
+        self, app_client: TestClient, tmp_path: Path
+    ) -> None:
+        from openbiliclaw.storage.database import Database
+
+        db = Database(tmp_path / "test.db")
+        db.initialize()
+
+        note_id = "note-sniffer-001"
+        bare_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+
+        # Seed a bare-URL cache row as the search-page path would.
+        app_client.post(
+            "/api/sources/xhs/observed-urls",
+            json={
+                "urls": [bare_url],
+                "notes": [
+                    {"url": bare_url, "title": "t", "author": "a", "cover_url": ""}
+                ],
+                "page_type": "search",
+            },
+        )
+
+        resp = app_client.post(
+            "/api/sources/xhs/tokens",
+            json={"pairs": [{"note_id": note_id, "xsec_token": "SNIFFED_TOKEN_42"}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert resp.json()["upgraded"] >= 1
+
+        row = db.conn.execute(
+            "SELECT content_url FROM content_cache WHERE bvid=?", (note_id,)
+        ).fetchone()
+        assert "xsec_token=SNIFFED_TOKEN_42" in row["content_url"], (
+            f"token backfill failed: {row['content_url']!r}"
+        )
+
+    def test_empty_pairs_is_noop(self, app_client: TestClient) -> None:
+        resp = app_client.post("/api/sources/xhs/tokens", json={"pairs": []})
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True, "upgraded": 0}
+
+    def test_skips_malformed_pairs(
+        self, app_client: TestClient, tmp_path: Path
+    ) -> None:
+        resp = app_client.post(
+            "/api/sources/xhs/tokens",
+            json={
+                "pairs": [
+                    {"note_id": "", "xsec_token": "tok"},
+                    {"note_id": "note-x", "xsec_token": ""},
+                    "not-a-dict",
+                    {"note_id": "note-y"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["upgraded"] == 0

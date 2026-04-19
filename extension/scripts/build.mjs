@@ -17,6 +17,10 @@ const entrypoints = [
     entry: resolve(root, "src/content/xiaohongshu.ts"),
     outfile: resolve(root, "dist/content/xiaohongshu.js"),
   },
+  {
+    entry: resolve(root, "src/main/xhs-token-sniffer.ts"),
+    outfile: resolve(root, "dist/main/xhs-token-sniffer.js"),
+  },
 ];
 
 for (const target of entrypoints) {

@@ -1267,9 +1267,12 @@ function renderRecommendations(items, { append = false } = {}) {
       image.alt = `${item.title} 的封面`;
       image.referrerPolicy = "no-referrer";
       image.addEventListener("error", () => {
-        cover.replaceChildren();
+        image.remove();
         cover.classList.add("is-fallback");
-        cover.textContent = "封面加载慢了一下";
+        const fallbackText = document.createElement("span");
+        fallbackText.className = "recommendation-cover-fallback-text";
+        fallbackText.textContent = "封面加载慢了一下";
+        cover.prepend(fallbackText);
       });
       cover.append(image);
     } else {
@@ -1293,12 +1296,13 @@ function renderRecommendations(items, { append = false } = {}) {
       badge.textContent = item.topic_label;
       top.append(badge);
     }
-    if (item.source_platform && item.source_platform !== "bilibili") {
-      const sourceBadge = document.createElement("span");
-      sourceBadge.className = "topic-badge source-badge";
-      sourceBadge.textContent = item.source_platform;
-      top.append(sourceBadge);
-    }
+    const platformKey = (item.source_platform || "bilibili").toLowerCase();
+    const platformLabel =
+      { bilibili: "B 站", xiaohongshu: "小红书" }[platformKey] || item.source_platform;
+    const sourceCorner = document.createElement("span");
+    sourceCorner.className = `recommendation-source-corner source-platform-${platformKey}`;
+    sourceCorner.textContent = platformLabel;
+    cover.append(sourceCorner);
     top.append(stateBadge);
 
     const copyBlock = document.createElement("div");
@@ -2050,7 +2054,7 @@ function bindSettings() {
       scheduler: {
         enabled: document.getElementById("cfgSchedulerEnabled")?.checked ?? true,
         discovery_cron: getVal("cfgDiscoveryCron"),
-        pool_target_count: parseInt(getVal("cfgPoolTarget"), 10) || 300,
+        pool_target_count: parseInt(getVal("cfgPoolTarget"), 10) || 600,
         auto_update_enabled: document.getElementById("cfgAutoUpdate")?.checked ?? true,
       },
       logging: {

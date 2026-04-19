@@ -773,6 +773,52 @@ async def test_discovery_engine_caches_final_results() -> None:
 
 
 @pytest.mark.asyncio
+async def test_discovery_engine_cache_results_preserves_multi_source_fields() -> None:
+    """Regression: rescoring xhs rows must not overwrite source_platform.
+
+    Previously `_cache_results` dropped `source_platform` / `content_id` /
+    `content_url` on the cache_content call, so the upsert reverted xhs
+    rows to the `bilibili` default — producing rows labeled with
+    `source_platform='bilibili'` even though their bvid was an xhs note id.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+
+        engine = ContentDiscoveryEngine(database=db)
+        engine.register_strategy(
+            _RecordingStrategy(
+                "search",
+                [
+                    DiscoveredContent(
+                        bvid="6613e9ac000000001a015e65",
+                        title="鸡煲复刻",
+                        up_name="作者A",
+                        relevance_score=0.7,
+                        source_strategy="xhs-extension-task",
+                        content_id="6613e9ac000000001a015e65",
+                        content_url="https://www.xiaohongshu.com/explore/6613e9ac000000001a015e65",
+                        source_platform="xiaohongshu",
+                    )
+                ],
+            )
+        )
+
+        await engine.discover(_build_profile(), limit=20)
+
+        row = db.conn.execute(
+            "SELECT source, source_platform, content_id, content_url "
+            "FROM content_cache WHERE bvid=?",
+            ("6613e9ac000000001a015e65",),
+        ).fetchone()
+        assert row is not None
+        assert row["source_platform"] == "xiaohongshu"
+        assert row["source"] == "xhs-extension-task"
+        assert row["content_id"] == "6613e9ac000000001a015e65"
+        assert row["content_url"].endswith("/6613e9ac000000001a015e65")
+
+
+@pytest.mark.asyncio
 async def test_discovery_engine_cache_results_preserves_relevance_fields() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")

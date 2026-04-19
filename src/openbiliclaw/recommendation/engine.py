@@ -89,6 +89,7 @@ class RecommendationEngine:
         self._database = database
         self._curator = curator
         self._embedding_service = embedding_service
+        self._classify_lock = asyncio.Lock()
 
     async def serve(
         self,
@@ -308,6 +309,15 @@ class RecommendationEngine:
                 scoring whenever the copy queue is short.
             batch_size: Batch size for expression generation LLM calls.
         """
+        # Safety net: classify any leftover un-evaluated items that were
+        # not caught by the ingest-time classification (e.g. race condition,
+        # or the background task was suppressed).  This is a no-op when all
+        # pool items already have style_key and topic_group.
+        try:
+            await self.classify_pool_backlog(profile=profile, limit=limit)
+        except Exception:
+            logger.exception("classify_pool_backlog failed, continuing with precompute")
+
         candidates = self._load_pool_candidates_needing_copy(limit=max(0, limit))
         if not candidates:
             # Even when no expression work is needed, still run delight scoring
@@ -327,6 +337,187 @@ class RecommendationEngine:
             profile=profile, limit=delight_limit,
         )
         return completed
+
+    # ── Source-agnostic content classification ───────────────────────
+    #
+    # Content from any source (bilibili, xiaohongshu, web, …) must carry
+    # the same set of content features (style_key, topic_group,
+    # relevance_score) before it enters the diversity/ranking pipeline.
+    # Items that lack these features would collapse _select_diversified_batch
+    # — all sharing "unknown" style and a single fallback topic token.
+    #
+    # classify_pool_backlog() is the single gate: it picks up un-classified
+    # items in the pool, runs them through the same LLM evaluation used for
+    # bilibili discovery, and writes results back.  After this step content
+    # is truly source-agnostic — the recommendation layer only sees content
+    # features, never platform labels.
+
+    async def classify_pool_backlog(
+        self,
+        *,
+        profile: SoulProfile,
+        limit: int = 30,
+        batch_size: int = 10,
+    ) -> int:
+        """Classify pool items that lack content features (style / topic / score).
+
+        Content enters the pool from many sources.  Bilibili content is
+        classified during discovery, but other sources (xiaohongshu, web, …)
+        may bypass that pipeline and arrive with empty ``style_key``,
+        ``topic_group``, and ``relevance_score``.
+
+        This method is the recommendation module's guarantee of
+        source-agnostic treatment: every item that reaches the ranking
+        pipeline has proper content features, regardless of where it came
+        from.  It reuses the same LLM evaluation prompt that discovery uses,
+        so the feature space is identical across all sources.
+
+        Returns:
+            Number of items classified.
+        """
+        if self._classify_lock.locked():
+            return 0  # Another classify task is already running
+        async with self._classify_lock:
+            return await self._classify_pool_backlog_locked(
+                profile=profile, limit=limit, batch_size=batch_size,
+            )
+
+    async def _classify_pool_backlog_locked(
+        self,
+        *,
+        profile: SoulProfile,
+        limit: int,
+        batch_size: int,
+    ) -> int:
+        """Inner implementation of classify_pool_backlog, called under lock."""
+        rows = self._database.get_pool_candidates_needing_evaluation(limit=limit)
+        if not rows:
+            return 0
+
+        items = self._rows_to_discovered(rows)
+        logger.info(
+            "classify_pool_backlog: %d un-classified items (platforms: %s)",
+            len(items),
+            ", ".join(sorted({item.source_platform or "unknown" for item in items})),
+        )
+
+        classified = 0
+        for batch_start in range(0, len(items), batch_size):
+            batch = items[batch_start : batch_start + batch_size]
+            try:
+                await self._classify_batch(batch, profile)
+            except Exception:
+                logger.exception(
+                    "classify_pool_backlog: batch failed (%d items)", len(batch),
+                )
+                continue
+
+            # Persist results back to the pool.
+            for item in batch:
+                # Use topic_group as topic_key when the original is empty —
+                # diversity tokens fall back to topic_key, so this is critical.
+                if not item.topic_key and item.topic_group:
+                    item.topic_key = item.topic_group
+                try:
+                    self._database.cache_content(
+                        item.bvid, **item.to_cache_kwargs(),
+                    )
+                    classified += 1
+                except Exception:
+                    logger.exception(
+                        "classify_pool_backlog: failed to persist %s", item.bvid,
+                    )
+
+        logger.info(
+            "classify_pool_backlog: %d/%d items classified "
+            "(styles: %s, topics: %s)",
+            classified,
+            len(items),
+            ", ".join(sorted({i.style_key or "unknown" for i in items})),
+            ", ".join(sorted({i.topic_group or "unknown" for i in items})),
+        )
+        return classified
+
+    async def _classify_batch(
+        self,
+        batch: list[DiscoveredContent],
+        profile: SoulProfile,
+    ) -> None:
+        """Run batched LLM evaluation on a group of un-classified items.
+
+        Mutates each item in-place: sets ``relevance_score``,
+        ``relevance_reason``, ``topic_group``, and ``style_key``.
+        """
+        from openbiliclaw.discovery.engine import VALID_STYLE_KEYS
+        from openbiliclaw.llm.prompts import build_batch_content_evaluation_prompt
+
+        profile_data = {
+            "personality_portrait": profile.personality_portrait,
+            "core_traits": profile.core_traits[:5],
+            "deep_needs": profile.deep_needs[:5],
+            "interests": [
+                {"name": item.name, "category": item.category, "weight": item.weight}
+                for item in profile.preferences.interests[:10]
+            ],
+        }
+        content_items = [
+            {
+                "title": c.title,
+                "up_name": c.up_name or c.author_name,
+                "description": (c.description or "")[:200],
+                "duration": c.duration,
+                "view_count": c.view_count,
+                "source_strategy": c.source_strategy,
+            }
+            for c in batch
+        ]
+        # Determine the dominant platform for prompt context
+        platform = (batch[0].source_platform or "bilibili") if batch else "bilibili"
+        messages = build_batch_content_evaluation_prompt(
+            profile_summary=profile_data,
+            content_items=content_items,
+            source_context=batch[0].source_strategy if batch else "",
+            source_platform=platform,
+        )
+
+        response = await self._llm.complete_structured_task(
+            system_instruction=messages[0]["content"],
+            user_input=messages[1]["content"],
+            max_tokens=8192,
+        )
+        raw = str(getattr(response, "content", "")).strip()
+        payload = json.loads(raw)
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            raise ValueError(f"Expected JSON array, got {type(payload).__name__}")
+
+        if len(payload) != len(batch):
+            logger.warning(
+                "LLM returned %d results for %d items in classification batch",
+                len(payload), len(batch),
+            )
+
+        for i, content in enumerate(batch):
+            if i >= len(payload) or not isinstance(payload[i], dict):
+                # Mark as attempted so get_pool_candidates_needing_evaluation
+                # won't retry this item forever.  A score of 0.01 signals
+                # "classification attempted but no usable result".
+                content.relevance_score = 0.01
+                content.relevance_reason = "classification_failed"
+                continue
+            result = payload[i]
+            score = max(0.0, min(1.0, float(result.get("score", 0.0))))
+            reason = str(result.get("reason", "")).strip()
+            topic_group = str(result.get("topic_group", "")).strip()
+            style_key = str(result.get("style_key", "")).strip().lower()
+
+            content.relevance_score = score or 0.01  # never leave at 0.0
+            content.relevance_reason = reason
+            if topic_group:
+                content.topic_group = topic_group
+            if style_key in VALID_STYLE_KEYS:
+                content.style_key = style_key
 
     async def precompute_delight_scores(
         self,
@@ -860,7 +1051,6 @@ class RecommendationEngine:
             if (
                 not needs_source_floor
                 and not prioritize_new_source
-                and style_token
                 and style_counts.get(style_token, 0) >= per_style_cap
             ):
                 deferred.append(item)
@@ -884,8 +1074,7 @@ class RecommendationEngine:
             for token in tokens:
                 topic_counts[token] = topic_counts.get(token, 0) + 1
             _track_broad(item)
-            if style_token:
-                style_counts[style_token] = style_counts.get(style_token, 0) + 1
+            style_counts[style_token] = style_counts.get(style_token, 0) + 1
             if source_token:
                 seen_sources.add(source_token)
                 source_counts[source_token] = source_counts.get(source_token, 0) + 1
@@ -913,7 +1102,6 @@ class RecommendationEngine:
                     continue
                 if (
                     enforce_style_cap
-                    and style_token
                     and style_counts.get(style_token, 0) >= per_style_cap
                 ):
                     remaining.append(item)
@@ -929,8 +1117,7 @@ class RecommendationEngine:
                 for token in tokens:
                     topic_counts[token] = topic_counts.get(token, 0) + 1
                 _track_broad(item)
-                if style_token:
-                    style_counts[style_token] = style_counts.get(style_token, 0) + 1
+                style_counts[style_token] = style_counts.get(style_token, 0) + 1
                 if source_token:
                     source_counts[source_token] = source_counts.get(source_token, 0) + 1
                 if len(selected) >= limit:
@@ -969,26 +1156,24 @@ class RecommendationEngine:
                 enforce_broad_cap=True,  # Never relax broad_cap
             )
         if len(selected) < limit:
-            # Final fallback: still enforce a relaxed broad-topic ceiling
-            # (2x broad_cap) to prevent a single mega-topic from flooding.
+            # Final fallback: topic diversity still holds at a relaxed
+            # ceiling (2× the tight broad_cap). Topic is the true signal of
+            # content richness — if 10 items share the same broad topic the
+            # batch feels repetitive regardless of style or source. Items
+            # with no topic (bt == "") are allowed through freely so we
+            # still reach `limit` when the pool is thin but legitimate.
             fallback_broad_cap = broad_cap * 2
             for item in remaining:
                 bt = cls._broad_topic_token(item)
+                style_token = cls._style_token(item)
                 if bt and broad_topic_counts.get(bt, 0) >= fallback_broad_cap:
                     continue
                 selected.append(item)
                 if bt:
                     broad_topic_counts[bt] = broad_topic_counts.get(bt, 0) + 1
+                style_counts[style_token] = style_counts.get(style_token, 0) + 1
                 if len(selected) >= limit:
                     break
-        # If STILL not enough (all topics exhausted caps), fill unconditionally
-        if len(selected) < limit:
-            filled = {item.bvid for item in selected}
-            for item in remaining:
-                if item.bvid not in filled:
-                    selected.append(item)
-                    if len(selected) >= limit:
-                        break
         return cls._interleave_by_topic(selected[:limit])
 
     @staticmethod
@@ -1010,9 +1195,20 @@ class RecommendationEngine:
         if tokens:
             return tokens
 
-        fallback_fields = [item.source_strategy, item.up_name]
+        # Fallback: use author + title keywords as diversity signals.
+        # NOTE: source_strategy is intentionally excluded — when many items
+        # share the same source_strategy (e.g. "xhs-extension-task"), using
+        # it as a topic token makes the diversity mechanism treat them as
+        # "same topic" and collapse the entire batch into one bucket.
+        fallback_fields = [item.up_name]
         title = item.title
         fallback_fields.extend(re.findall(r"[A-Za-z0-9]{2,}", title))
+        # Also extract Chinese character runs from the title as fallback
+        # topic signals — these are far more discriminating than
+        # source_strategy for content that lacks proper classification.
+        fallback_fields.extend(
+            m for m in re.findall(r"[\u4e00-\u9fff]{2,4}", title)
+        )
         return {
             RecommendationEngine._normalize_topic_token(value)
             for value in fallback_fields
@@ -1021,7 +1217,16 @@ class RecommendationEngine:
 
     @staticmethod
     def _style_token(item: DiscoveredContent) -> str:
-        return RecommendationEngine._normalize_topic_token(item.style_key)
+        """Normalize style_key into a cap-tracked bucket.
+
+        Empty/missing style_key maps to the sentinel ``"unknown"`` so that
+        unclassified content (common for xhs notes, which lack the bilibili
+        style classification) still participates in the per-style cap.
+        Without this, unclassified items would all bypass style_counts and
+        could flood a batch with visually monotonous rows.
+        """
+        token = RecommendationEngine._normalize_topic_token(item.style_key)
+        return token or "unknown"
 
     @staticmethod
     def _broad_topic_token(item: DiscoveredContent) -> str:
@@ -1113,6 +1318,17 @@ class RecommendationEngine:
     def _source_cap(limit: int) -> int:
         return 2 if limit <= 5 else 3
 
+    @staticmethod
+    def _platform_token(item: DiscoveredContent) -> str:
+        """Platform label for observability only — not used to filter picks.
+
+        Diversity and caps are driven by content features (style, topic,
+        source_strategy). This is exposed in ``_build_debug_summary`` so
+        log readers can still see the platform split per round.
+        """
+        platform = (item.source_platform or "").strip().lower()
+        return platform or "bilibili"
+
     def _rows_to_discovered(
         self,
         rows: list[dict[str, Any]],
@@ -1147,6 +1363,9 @@ class RecommendationEngine:
                 candidate_tier=str(row.get("candidate_tier", "primary") or "primary"),
                 discovered_at=str(row.get("discovered_at", "")),
                 last_scored_at=str(row.get("last_scored_at", "")),
+                content_id=str(row.get("content_id", "") or row.get("bvid", "")),
+                content_url=str(row.get("content_url", "")),
+                source_platform=str(row.get("source_platform", "") or "bilibili"),
             )
             for row in rows
         ]
@@ -1194,6 +1413,7 @@ class RecommendationEngine:
             cls._normalize_topic_token(item.source_strategy) or "unknown"
             for item in candidates
         )
+        platform_counts = Counter(cls._platform_token(item) for item in candidates)
         topic_counts: Counter[str] = Counter()
         for item in candidates:
             tokens = cls._diversity_tokens(item)
@@ -1203,6 +1423,7 @@ class RecommendationEngine:
             topic_counts[sorted(tokens)[0]] += 1
         return {
             "count": len(candidates),
+            "platforms": dict(platform_counts.most_common()),
             "styles": dict(style_counts.most_common(5)),
             "sources": dict(source_counts.most_common(5)),
             "topics": dict(topic_counts.most_common(5)),

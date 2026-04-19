@@ -78,12 +78,12 @@ class TestConfigDefaults:
         assert config.llm.default_provider == "openai"
         assert config.bilibili.auth_method == "cookie"
         assert config.scheduler.enabled is True
-        assert config.scheduler.pool_target_count == 300
+        assert config.scheduler.pool_target_count == 600
 
-    def test_config_defaults_pool_target_count_to_300(self) -> None:
+    def test_config_defaults_pool_target_count_to_600(self) -> None:
         config = Config()
 
-        assert config.scheduler.pool_target_count == 300
+        assert config.scheduler.pool_target_count == 600
 
     def test_build_from_empty_dict(self) -> None:
         config = _build_config({})
@@ -131,6 +131,25 @@ class TestConfigDefaults:
         assert config.logging.file_level == "DEBUG"
         assert config.logging.directory == "runtime_logs"
         assert config.logging.filename == "app.log"
+
+    def test_logging_rotation_defaults(self) -> None:
+        config = Config()
+
+        assert config.logging.max_file_size_mb == 1024
+        assert config.logging.backup_count == 1
+
+    def test_build_logging_config_parses_rotation_fields(self) -> None:
+        raw = {
+            "logging": {
+                "max_file_size_mb": 256,
+                "backup_count": 3,
+            }
+        }
+
+        config = _build_config(raw)
+
+        assert config.logging.max_file_size_mb == 256
+        assert config.logging.backup_count == 3
 
 
 def test_load_config_with_diagnostics_creates_config_file(
@@ -298,7 +317,7 @@ def test_validate_runtime_config_rejects_pool_target_count_above_cap() -> None:
         scheduler=SchedulerConfig(
             enabled=True,
             discovery_cron="0 */4 * * *",
-            pool_target_count=301,
+            pool_target_count=601,
             account_sync_interval_hours=6,
         )
     )
@@ -348,7 +367,7 @@ def test_sources_browser_defaults_are_empty() -> None:
 def test_sources_xiaohongshu_defaults() -> None:
     config = _build_config({})
 
-    assert config.sources.xiaohongshu.daily_search_budget == 20
+    assert config.sources.xiaohongshu.daily_search_budget == 30
     assert config.sources.xiaohongshu.daily_creator_budget == 10
     assert config.sources.xiaohongshu.task_interval_seconds == 45
 

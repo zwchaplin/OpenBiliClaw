@@ -433,7 +433,7 @@ class BilibiliConfigOut(BaseModel):
 class SchedulerConfigOut(BaseModel):
     enabled: bool = True
     discovery_cron: str = "0 */4 * * *"
-    pool_target_count: int = 300
+    pool_target_count: int = 600
     account_sync_interval_hours: int = 6
     auto_update_enabled: bool = True
     auto_update_check_interval_hours: int = 6

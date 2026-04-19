@@ -319,24 +319,49 @@ class Database:
                 source,
                 content_id,
                 content_url,
-                source_platform
+                source_platform,
+                author_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
             ON CONFLICT(bvid) DO UPDATE SET
                 title = excluded.title,
                 up_name = excluded.up_name,
                 up_mid = excluded.up_mid,
                 duration = excluded.duration,
                 tags = excluded.tags,
-                topic_key = excluded.topic_key,
-                topic_group = excluded.topic_group,
-                style_key = excluded.style_key,
+                -- Preserve LLM-classified fields: when the incoming value
+                -- is empty/zero, keep the existing DB value.  This prevents
+                -- re-ingest from raw sources (e.g. xhs extension re-sending
+                -- the same notes on every page load) from wiping out
+                -- classifications that classify_pool_backlog has written.
+                topic_key = COALESCE(
+                    NULLIF(excluded.topic_key, ''),
+                    content_cache.topic_key,
+                    ''
+                ),
+                topic_group = COALESCE(
+                    NULLIF(excluded.topic_group, ''),
+                    content_cache.topic_group,
+                    ''
+                ),
+                style_key = COALESCE(
+                    NULLIF(excluded.style_key, ''),
+                    content_cache.style_key,
+                    ''
+                ),
                 description = excluded.description,
                 cover_url = excluded.cover_url,
                 view_count = excluded.view_count,
                 like_count = excluded.like_count,
-                relevance_score = excluded.relevance_score,
-                relevance_reason = excluded.relevance_reason,
+                relevance_score = CASE
+                    WHEN excluded.relevance_score > 0 THEN excluded.relevance_score
+                    ELSE COALESCE(content_cache.relevance_score, 0)
+                END,
+                relevance_reason = COALESCE(
+                    NULLIF(excluded.relevance_reason, ''),
+                    content_cache.relevance_reason,
+                    ''
+                ),
                 pool_expression = COALESCE(
                     NULLIF(excluded.pool_expression, ''),
                     content_cache.pool_expression,
@@ -352,7 +377,12 @@ class Database:
                 source = excluded.source,
                 content_id = excluded.content_id,
                 content_url = excluded.content_url,
-                source_platform = excluded.source_platform
+                source_platform = excluded.source_platform,
+                author_name = COALESCE(
+                    NULLIF(excluded.author_name, ''),
+                    content_cache.author_name,
+                    ''
+                )
             """,
             (
                 bvid,
@@ -377,6 +407,7 @@ class Database:
                 kwargs.get("content_id", bvid),
                 kwargs.get("content_url", ""),
                 kwargs.get("source_platform", "bilibili"),
+                kwargs.get("author_name", ""),
             ),
         )
 
@@ -424,7 +455,16 @@ class Database:
         return self._balance_pool_rows(rows, limit=limit)
 
     def get_pool_candidates(self, limit: int = 20) -> list[dict[str, Any]]:
-        """Get fresh recommendation candidates directly from the discovery pool."""
+        """Get fresh recommendation candidates directly from the discovery pool.
+
+        Notes:
+            xhs rows without ``xsec_token`` in their ``content_url`` are
+            excluded. Bare xhs URLs get rejected by xhs with error 300031
+            when shared outbound, so surfacing them in recommendations
+            would just mint dead links. Tokens get backfilled by the
+            MAIN-world sniffer as the user browses xhs; bare rows become
+            eligible again once ``_backfill_xhs_tokens`` upgrades them.
+        """
         self._ensure_fresh_read()
         cursor = self.conn.execute(
             """
@@ -432,6 +472,10 @@ class Database:
             FROM content_cache
             WHERE COALESCE(pool_status, 'fresh') = 'fresh'
               AND COALESCE(feedback_type, '') != 'dislike'
+              AND (
+                source_platform != 'xiaohongshu'
+                OR content_url LIKE '%xsec_token=%'
+              )
               AND NOT EXISTS (
                 SELECT 1
                 FROM recommendations AS r
@@ -757,6 +801,44 @@ class Database:
         )
         return cursor.rowcount
 
+    def get_pool_candidates_needing_evaluation(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return fresh pool candidates that lack LLM content classification.
+
+        Targets items with empty ``style_key`` AND empty ``topic_group`` —
+        typically content from non-bilibili sources (e.g. xiaohongshu) that
+        was inserted directly into ``content_cache`` without passing through
+        the discovery engine's ``evaluate_content`` pipeline.
+
+        These items need LLM evaluation to receive ``style_key``,
+        ``topic_group``, and ``relevance_score`` so the diversity mechanism
+        in ``_select_diversified_batch`` can treat them equally alongside
+        bilibili content.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT *
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND COALESCE(feedback_type, '') != 'dislike'
+              AND COALESCE(style_key, '') = ''
+              AND COALESCE(topic_group, '') = ''
+              AND COALESCE(relevance_score, 0) = 0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM recommendations AS r
+                WHERE r.bvid = content_cache.bvid
+              )
+            ORDER BY
+                last_scored_at DESC,
+                bvid ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        rows = self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=len(rows))
+        return rows[:limit]
+
     def get_pool_candidates_needing_copy(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return fresh pool candidates missing precomputed popup copy."""
         cursor = self.conn.execute(
@@ -882,7 +964,11 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_recommendations(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Get recommendation history ordered by newest first."""
+        """Get recommendation history ordered by newest first.
+
+        xhs rows whose cached ``content_url`` is missing ``xsec_token``
+        are filtered out — clicking them hits xhs's 300031 login wall.
+        """
         self._ensure_fresh_read()
         cursor = self.conn.execute(
             """
@@ -890,9 +976,16 @@ class Database:
                 r.*,
                 c.title AS title,
                 c.up_name AS up_name,
-                c.cover_url AS cover_url
+                c.cover_url AS cover_url,
+                c.content_id AS content_id,
+                c.content_url AS content_url,
+                c.source_platform AS source_platform
             FROM recommendations AS r
             LEFT JOIN content_cache AS c ON c.bvid = r.bvid
+            WHERE (
+                COALESCE(c.source_platform, '') != 'xiaohongshu'
+                OR COALESCE(c.content_url, '') LIKE '%xsec_token=%'
+            )
             ORDER BY created_at DESC, id DESC
             LIMIT ?
             """,
@@ -1172,6 +1265,7 @@ class Database:
             "content_id": "TEXT DEFAULT ''",
             "content_url": "TEXT DEFAULT ''",
             "source_platform": "TEXT DEFAULT 'bilibili'",
+            "author_name": "TEXT DEFAULT ''",
         }
         added = False
         for column_name, column_type in required_columns.items():

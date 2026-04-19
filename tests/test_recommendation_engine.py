@@ -909,7 +909,10 @@ async def test_reshuffle_recommendations_backfills_to_requested_limit_when_style
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")
         db.initialize()
-        for index in range(6):
+        # Style-dominant but topic-diverse pool: all light_chat, but each item
+        # has a distinct broad topic so backfill can reach `limit`.
+        topics = ["生活随笔", "职场闲谈", "读书片段", "城市漫步", "餐桌小记", "音乐碎片"]
+        for index, topic in enumerate(topics):
             db.cache_content(
                 f"BVLIGHT{index + 1}",
                 title=f"轻聊候选 {index + 1}",
@@ -918,7 +921,7 @@ async def test_reshuffle_recommendations_backfills_to_requested_limit_when_style
                 relevance_score=0.96 - index * 0.01,
                 relevance_reason=f"这条会接住你最近想往里看一点的状态 {index + 1}。",
                 style_key="light_chat",
-                topic_key=f"轻聊话题:{index + 1}",
+                topic_key=topic,
             )
         engine = RecommendationEngine(llm=_DummyLLM(), database=db)
 
@@ -1106,4 +1109,372 @@ def test_build_debug_summary_counts_styles_sources_and_topics() -> None:
     assert summary["styles"] == {"deep_dive": 2, "news_brief": 1}
     assert summary["sources"] == {"search": 2, "trending": 1}
     assert summary["topics"] == {"国际时事:地缘政治": 2, "国际时事:贸易": 1}
+    assert summary["platforms"] == {"bilibili": 3}
     assert summary["sample_titles"] == ["讲透中东局势", "贸易政策速读", "另外一条中东局势"]
+
+
+def test_monoculture_pool_capped_by_broad_topic_not_platform() -> None:
+    """A pool where every item shares the same broad topic is capped by
+    topic — not by platform. xhs notes with no style classification can't
+    flood the batch just because they happen to be from xhs; the same limit
+    applies to any platform with identical topic saturation.
+    """
+    # Homogeneous pool: all share topic="ai" (→ broad bucket "ai"), style="".
+    # Fallback broad-topic ceiling = 2×broad_cap = 2×3 = 6 for limit=10.
+    homogeneous = [
+        DiscoveredContent(
+            bvid=f"XHS{i:02d}",
+            title=f"note {i}",
+            source_strategy="xhs-extension-task",
+            topic_key="ai",
+            style_key="",
+            source_platform="xiaohongshu",
+            relevance_score=0.9 - 0.01 * i,
+        )
+        for i in range(13)
+    ]
+
+    picked = RecommendationEngine._select_diversified_batch(homogeneous, limit=10)
+
+    # Broad-topic cap holds in the fallback — no monoculture batch.
+    assert len(picked) <= 6
+
+
+def test_content_diversity_treats_platforms_equally() -> None:
+    """Batch selector never discriminates by platform — it picks whatever
+    maximizes content-level diversity. An xhs item with rich classification
+    should win over a bilibili item with duplicate topic/style.
+    """
+    # xhs items with proper style + distinct topics — content-rich
+    rich_xhs = [
+        DiscoveredContent(
+            bvid=f"XHS{i:02d}",
+            title=f"xhs rich {i}",
+            source_strategy="xhs-extension-task",
+            topic_key=f"topic_x_{i}",
+            topic_group=f"group_x_{i}",
+            style_key="story_doc" if i % 2 else "visual_showcase",
+            source_platform="xiaohongshu",
+            relevance_score=0.95 - 0.005 * i,
+        )
+        for i in range(6)
+    ]
+    # bilibili items — also rich
+    rich_bili = [
+        DiscoveredContent(
+            bvid=f"BV{i:02d}",
+            title=f"bili rich {i}",
+            source_strategy="related_chain" if i % 2 else "search",
+            topic_key=f"topic_b_{i}",
+            topic_group=f"group_b_{i}",
+            style_key="deep_dive" if i % 2 else "news_brief",
+            source_platform="bilibili",
+            relevance_score=0.9 - 0.005 * i,
+        )
+        for i in range(6)
+    ]
+
+    picked = RecommendationEngine._select_diversified_batch(
+        rich_xhs + rich_bili, limit=10,
+    )
+
+    # Both platforms should be represented because content is diverse enough
+    # to pass topic/style caps — no platform gets artificially throttled.
+    xhs_count = sum(1 for p in picked if p.source_platform == "xiaohongshu")
+    bili_count = sum(1 for p in picked if p.source_platform == "bilibili")
+    assert xhs_count >= 3
+    assert bili_count >= 3
+    assert len(picked) == 10
+
+
+def test_pure_bilibili_rich_pool_fills_batch() -> None:
+    """Regression: diverse bilibili-only pool still fills to limit."""
+    candidates = [
+        DiscoveredContent(
+            bvid=f"BV{i:02d}",
+            title=f"bili {i}",
+            source_strategy="related_chain" if i % 2 else "search",
+            topic_key=f"topic_{i}",
+            topic_group=f"group_{i}",
+            style_key="deep_dive" if i % 2 else "news_brief",
+            source_platform="bilibili",
+            relevance_score=0.9 - 0.01 * i,
+        )
+        for i in range(15)
+    ]
+
+    picked = RecommendationEngine._select_diversified_batch(candidates, limit=10)
+
+    assert len(picked) == 10
+    assert all(p.source_platform == "bilibili" for p in picked)
+
+
+# ── Source-agnostic classification tests ─────────────────────────────
+
+
+def test_unclassified_xhs_items_not_collapsed_by_source_strategy() -> None:
+    """XHS items WITHOUT metadata should NOT all share one diversity token.
+
+    Before the fix, _diversity_tokens() fell back to source_strategy
+    ("xhs-extension-task") for all items, making them look like "same topic"
+    to the diversity mechanism.  After the fix, title-derived tokens provide
+    real differentiation even when topic_group/topic_key/tags are empty.
+    """
+    # 15 XHS items with empty metadata but DIFFERENT titles
+    candidates = [
+        DiscoveredContent(
+            bvid=f"XHS{i:02d}",
+            title=title,
+            up_name=f"author_{i}",
+            source_strategy="xhs-extension-task",
+            source_platform="xiaohongshu",
+            relevance_score=0.8 - 0.01 * i,
+            # Intentionally empty — simulates raw XHS ingest
+            topic_key="",
+            topic_group="",
+            style_key="",
+            tags=[],
+        )
+        for i, title in enumerate([
+            "莫氏鸡煲在家轻松复刻",
+            "工地十块自助盒饭",
+            "宝可梦PVP配队思路",
+            "咒术回战深度解析",
+            "DeepSeek本地部署教程",
+            "Mac Studio搭建AI工作流",
+            "顺德美食探店攻略",
+            "洛克王国世界吐槽",
+            "国际局势深度推演",
+            "React Native性能优化",
+            "独居女生的日常vlog",
+            "摄影构图原理讲解",
+            "上海工地烟火气",
+            "宝可梦冠军建模吐槽",
+            "AI自动化工作流实战",
+        ])
+    ]
+
+    picked = RecommendationEngine._select_diversified_batch(candidates, limit=10)
+
+    # Must fill the batch — should NOT collapse to 2-3 items due to
+    # all sharing the same "xhs-extension-task" topic token.
+    assert len(picked) == 10
+
+    # Titles should be diverse (not all "莫氏鸡煲" variants)
+    picked_titles = {p.title for p in picked}
+    assert len(picked_titles) >= 8
+
+
+def test_diversity_tokens_excludes_source_strategy() -> None:
+    """_diversity_tokens should NOT include source_strategy as a fallback."""
+    item = DiscoveredContent(
+        bvid="XHS01",
+        title="莫氏鸡煲在家复刻教程",
+        up_name="美食达人",
+        source_strategy="xhs-extension-task",
+        source_platform="xiaohongshu",
+        topic_key="",
+        topic_group="",
+        tags=[],
+    )
+    tokens = RecommendationEngine._diversity_tokens(item)
+    # source_strategy must not appear as a diversity token
+    assert "xhs-extension-task" not in tokens
+    assert "xhs-extension-tas" not in tokens  # truncated form
+    # But author and title-derived tokens should be present
+    assert len(tokens) >= 1
+
+
+@pytest.mark.asyncio
+async def test_classify_pool_backlog_fills_metadata() -> None:
+    """classify_pool_backlog should assign style_key and topic_group to
+    un-classified pool items via LLM evaluation."""
+
+    # LLM mock that returns batch classification results
+    class _ClassifyLLM:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def complete_structured_task(
+            self,
+            *,
+            system_instruction: str = "",
+            user_input: str = "",
+            history: list[dict[str, str]] | None = None,
+            temperature: float = 0.7,
+            max_tokens: int = 4096,
+        ) -> LLMResponse:
+            self.calls.append({"system_instruction": system_instruction})
+            # Check if this is a classification call (batch eval prompt)
+            # or an expression-generation call
+            if "批量评估" in system_instruction or "score" in system_instruction:
+                return LLMResponse(
+                    content=json.dumps([
+                        {
+                            "score": 0.85,
+                            "reason": "美食烹饪类内容",
+                            "topic_group": "美食烹饪",
+                            "style_key": "lifestyle",
+                        },
+                        {
+                            "score": 0.72,
+                            "reason": "游戏攻略",
+                            "topic_group": "游戏攻略",
+                            "style_key": "game_strategy",
+                        },
+                    ], ensure_ascii=False),
+                    provider="test",
+                    model="dummy",
+                    usage={},
+                )
+            return LLMResponse(
+                content=json.dumps({
+                    "expression": "这条给你找的。",
+                    "topic_label": "test",
+                }, ensure_ascii=False),
+                provider="test",
+                model="dummy",
+                usage={},
+            )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+
+        # Insert 2 XHS items with NO metadata
+        db.cache_content(
+            "xhs_001",
+            title="莫氏鸡煲在家复刻",
+            up_name="美食博主",
+            source="xhs-extension-task",
+            source_platform="xiaohongshu",
+            content_id="xhs_001",
+            content_url="https://www.xiaohongshu.com/explore/xhs_001?xsec_token=abc",
+            style_key="",
+            topic_group="",
+            topic_key="",
+            relevance_score=0.0,
+        )
+        db.cache_content(
+            "xhs_002",
+            title="宝可梦PVP配队",
+            up_name="游戏玩家",
+            source="xhs-extension-task",
+            source_platform="xiaohongshu",
+            content_id="xhs_002",
+            content_url="https://www.xiaohongshu.com/explore/xhs_002?xsec_token=def",
+            style_key="",
+            topic_group="",
+            topic_key="",
+            relevance_score=0.0,
+        )
+
+        llm = _ClassifyLLM()
+        engine = RecommendationEngine(llm=llm, database=db)
+
+        classified = await engine.classify_pool_backlog(
+            profile=_build_profile(),
+            limit=10,
+        )
+
+        assert classified == 2
+
+        # Verify DB was updated
+        rows = db.get_pool_candidates(limit=10)
+        by_bvid = {r["bvid"]: r for r in rows}
+
+        xhs1 = by_bvid.get("xhs_001")
+        assert xhs1 is not None
+        assert xhs1["style_key"] == "lifestyle"
+        assert xhs1["topic_group"] == "美食烹饪"
+        assert xhs1["topic_key"] == "美食烹饪"  # backfilled from topic_group
+        assert float(xhs1["relevance_score"]) == pytest.approx(0.85)
+
+        xhs2 = by_bvid.get("xhs_002")
+        assert xhs2 is not None
+        assert xhs2["style_key"] == "game_strategy"
+        assert xhs2["topic_group"] == "游戏攻略"
+
+
+@pytest.mark.asyncio
+async def test_classify_pool_backlog_skips_already_classified() -> None:
+    """Items that already have style_key + topic_group should not be re-evaluated."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+
+        # Already classified bilibili item
+        db.cache_content(
+            "BV_classified",
+            title="已分类的内容",
+            up_name="UP主",
+            source="search",
+            style_key="deep_dive",
+            topic_group="强化学习",
+            relevance_score=0.9,
+        )
+
+        llm = _DummyLLM()
+        engine = RecommendationEngine(llm=llm, database=db)
+
+        classified = await engine.classify_pool_backlog(
+            profile=_build_profile(),
+            limit=10,
+        )
+
+        # Nothing to classify — the item is already fully classified
+        assert classified == 0
+        # LLM should NOT have been called for classification
+        assert len(llm.calls) == 0
+
+
+def test_re_ingest_does_not_overwrite_classified_fields() -> None:
+    """cache_content upsert must preserve LLM-classified fields when the
+    incoming values are empty.
+
+    The XHS extension re-sends the same notes on every page load.  Without
+    COALESCE protection, re-ingest would overwrite style_key / topic_group /
+    relevance_score with empty defaults, undoing the LLM classification.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+
+        # First insert: classified content (as if classify_pool_backlog ran)
+        db.cache_content(
+            "xhs_reingest",
+            title="莫氏鸡煲在家复刻",
+            up_name="美食博主",
+            source="xhs-extension-task",
+            source_platform="xiaohongshu",
+            style_key="lifestyle",
+            topic_group="美食烹饪",
+            topic_key="美食烹饪",
+            relevance_score=0.85,
+            relevance_reason="美食烹饪类内容",
+        )
+
+        # Second insert: extension re-sends same note with empty metadata
+        db.cache_content(
+            "xhs_reingest",
+            title="莫氏鸡煲在家复刻",
+            up_name="美食博主",
+            source="xhs-extension-task",
+            source_platform="xiaohongshu",
+            # These are all empty — must NOT overwrite existing values
+            style_key="",
+            topic_group="",
+            topic_key="",
+            relevance_score=0.0,
+            relevance_reason="",
+        )
+
+        rows = db.get_cached_content(limit=10)
+        row = next(r for r in rows if r["bvid"] == "xhs_reingest")
+
+        # All classified fields must survive the re-ingest
+        assert row["style_key"] == "lifestyle"
+        assert row["topic_group"] == "美食烹饪"
+        assert row["topic_key"] == "美食烹饪"
+        assert float(row["relevance_score"]) == pytest.approx(0.85)
+        assert row["relevance_reason"] == "美食烹饪类内容"

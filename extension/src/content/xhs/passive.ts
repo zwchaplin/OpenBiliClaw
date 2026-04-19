@@ -150,6 +150,11 @@ export function extractNoteMetadataFromAnchor(
   );
   const title = titleEl?.textContent?.trim() || anchor.title || "";
 
+  // Skip notes with empty title — xhs frequently changes DOM structure,
+  // so CSS selectors can fail to match.  An empty title produces blank
+  // recommendation cards and wastes LLM classification budget.
+  if (!title) return null;
+
   const authorEl = card.querySelector(
     ".author-wrapper .name, .author .name, .user-name, [class*='author'] .name, .nickname",
   );
