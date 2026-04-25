@@ -122,6 +122,48 @@ def _print_placeholder(feature: str, next_step: str = "") -> None:
     _print_status_panel("stub", "开发中", body)
 
 
+async def _run_with_progress(
+    coro: Any,
+    *,
+    label: str,
+    eta_seconds: int,
+    tick_seconds: int = 20,
+) -> Any:
+    """Run a coroutine while printing periodic progress updates.
+
+    Init's LLM-heavy phases (analyze_events, build_initial_profile,
+    discover) each take 1-5 minutes of mostly-silent waiting on
+    deepseek thinking. Without a heartbeat the user can't tell
+    whether the process is alive or stuck. This helper prints one
+    "started, ETA Xs" line, ticks every ``tick_seconds`` with
+    elapsed/ETA while the work runs, and prints a final completion
+    line with actual wall time.
+    """
+    import time as _time
+    from contextlib import suppress as _suppress
+
+    console.print(f"  [dim]→ {label}（预计 ~{eta_seconds}s）[/dim]")
+    start = _time.monotonic()
+
+    async def _ticker() -> None:
+        while True:
+            await asyncio.sleep(tick_seconds)
+            elapsed = int(_time.monotonic() - start)
+            remaining = max(0, eta_seconds - elapsed)
+            console.print(f"  [dim]· {label}: 已用 {elapsed}s / 预计还需 ~{remaining}s[/dim]")
+
+    ticker_task = asyncio.create_task(_ticker())
+    try:
+        result = await coro
+    finally:
+        ticker_task.cancel()
+        with _suppress(asyncio.CancelledError, BaseException):
+            await ticker_task
+    elapsed = int(_time.monotonic() - start)
+    console.print(f"  [green]✓[/green] {label} 用时 {elapsed}s")
+    return result
+
+
 def _print_recommendation_card(item: Any, index: int) -> None:
     """Render one recommendation in a card-like format."""
     rows = [
@@ -621,13 +663,17 @@ def _run_init_discovery_backfill(profile: Any, *, target_pool_count: int = 100) 
             f"当前池子 {current_pool_count}/{target_pool_count}，本轮请求上限 {request_limit}"
         )
         discovered = asyncio.run(
-            discovery_engine.discover(
-                profile,
-                strategies=strategies,
-                limit=request_limit,
-                # Init is latency-critical — skip the default search-first
-                # phase split and let every strategy share the gather.
-                fully_parallel=True,
+            _run_with_progress(
+                discovery_engine.discover(
+                    profile,
+                    strategies=strategies,
+                    limit=request_limit,
+                    # Init is latency-critical — skip the default search-first
+                    # phase split and let every strategy share the gather.
+                    fully_parallel=True,
+                ),
+                label=f"发现内容({_format_strategy_group(strategies)} 并发)",
+                eta_seconds=300,
             )
         )
         discovered_count += len(discovered)
@@ -786,7 +832,13 @@ def init() -> None:
     # Chunk the event list so multiple analysis calls run concurrently
     # instead of serialising a single max-thinking call over ~800 events.
     # ``merge_preferences`` folds the partial results back together.
-    asyncio.run(soul_engine.analyze_events(events, event_chunk_size=200))
+    asyncio.run(
+        _run_with_progress(
+            soul_engine.analyze_events(events, event_chunk_size=200),
+            label="分析偏好(4 个并发分片)",
+            eta_seconds=180,
+        )
+    )
 
     _print_section_title("3/4 生成画像")
     # Merge favorites and following into history for profile builder
@@ -813,7 +865,13 @@ def init() -> None:
                 + ", ".join(f["name"] for f in following_data[:100]),
             }
         )
-    profile_data = asyncio.run(soul_engine.build_initial_profile(combined_history))
+    profile_data = asyncio.run(
+        _run_with_progress(
+            soul_engine.build_initial_profile(combined_history),
+            label="生成画像(单次 LLM 综合分析)",
+            eta_seconds=70,
+        )
+    )
 
     _print_section_title("4/4 发现内容")
     discovered_count = 0
