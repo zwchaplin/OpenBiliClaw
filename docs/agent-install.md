@@ -103,13 +103,31 @@ Once they've picked, only ask the **fields that option actually needs**.
 
 #### Option 1 (Ollama):
 
-> 「Ollama 是个本地运行的开源工具。请确认：
->   - 你的电脑已经装了 Ollama（Mac: `brew install ollama` / Windows: 从 https://ollama.com/download 下载 / Linux: `curl -fsSL https://ollama.com/install.sh \| sh`）
->   - Ollama 服务在跑（终端里 `ollama serve &`，或 Mac 直接打开 Ollama.app）
->   - 拉了一个模型（建议 `ollama pull llama3` 或更小的 `ollama pull qwen2.5:3b`）」
+**You don't need to ask the user to install Ollama themselves.** Since
+v0.3.10, `agent_bootstrap.py` auto-installs Ollama (macOS via `brew`,
+Windows via `winget`, Linux via the official `install.sh`), starts the
+daemon in the background, and pulls the chat model. All you tell the
+user is:
 
-Then run with `--provider ollama` (no `--llm-api-key`, no `--llm-base-url`
-unless they need a non-default port).
+> 「我会帮你装 Ollama 和拉模型，需要 1–3 分钟（取决于你的网速）。
+>   不需要你做任何事，全程会打印进度。」
+
+Then run with `--provider ollama --llm-model llama3` (or
+`qwen2.5:3b` for a smaller model on weaker hardware). No `--llm-api-key`
+or `--llm-base-url` needed.
+
+If the auto-install fails (no `brew` on Mac, no `winget` on Windows,
+no `sudo` on Linux), the bootstrap emits an `ollama_install_failed`
+event with a manual-install URL. Tell the user that exact URL and ask
+them to install Ollama from there, then re-run the same bootstrap
+command — config already on disk, only the Ollama phase will rerun.
+
+Inside Docker mode the bootstrap **does not** auto-install Ollama. The
+container talks to the host's Ollama at `host.docker.internal:11434`,
+so installing it inside the container would be the wrong target. The
+user must run the host-side `ollama` themselves; the bootstrap just
+checks `[llm.ollama] base_url`. Tell Docker users to install Ollama
+on their host first.
 
 #### Option 2 (OpenAI 官方):
 
@@ -152,8 +170,10 @@ Tell the user:
 >   3. **跳过，先不配**（默认跟随 LLM）」
 
 If the user picks option 2 (local Ollama embedding), use:
-`--embedding-provider ollama --embedding-model bge-m3`. Tell them to run
-`ollama pull bge-m3` (~568MB, CPU 即可) before next backend restart.
+`--embedding-provider ollama --embedding-model bge-m3`. **Don't tell
+them to pull `bge-m3` themselves** — `agent_bootstrap.py` auto-pulls it
+during the Ollama setup phase (since v0.3.10), same as the chat model.
+The bootstrap also auto-installs Ollama if it isn't there yet.
 
 If option 1 or 3, leave embedding flags off entirely (don't pass empty
 strings, just omit the flags).

@@ -200,6 +200,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Bilibili cookie string. Stored in config.toml and data/bilibili_cookie.json.",
     )
     parser.add_argument(
+        "--skip-ollama-setup",
+        action="store_true",
+        help=(
+            "When --provider=ollama or --embedding-provider=ollama is "
+            "selected, the bootstrap will by default detect, install (via "
+            "brew/winget/install.sh), start, and pull the requested model. "
+            "Pass this flag to opt out — useful if you manage Ollama "
+            "yourself (e.g. inside a container with a custom image)."
+        ),
+    )
+    parser.add_argument(
         "--skip-start",
         action="store_true",
         help="Prepare config and dependencies but do not start the backend.",
@@ -267,6 +278,276 @@ def detect_uv() -> bool:
     """Return True when `uv` is available on PATH."""
 
     return which("uv") is not None
+
+
+# ---------------------------------------------------------------------------
+# Ollama auto-install helpers
+#
+# When the user picks ollama as their LLM and/or embedding provider, the
+# install isn't really "done" until ollama itself is installed, the daemon
+# is up, and the requested models are pulled. Without these helpers the
+# user lands in a "config is fine but nothing works because ollama is
+# missing" state, which defeats the one-line install promise.
+
+OLLAMA_HOST = "http://localhost:11434"
+
+
+def detect_ollama() -> str | None:
+    """Return the ollama binary path, or None when not installed."""
+
+    return which("ollama")
+
+
+def ollama_running(timeout: float = 2.0) -> bool:
+    """Probe Ollama's HTTP API. True iff /api/version returns 200."""
+
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_HOST}/api/version", timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def install_ollama() -> bool:
+    """Install Ollama using the platform-native package manager.
+
+    macOS: prefer brew (most devs have it), fall back to printing the
+        download URL.
+    Windows: prefer winget (ships on Win 10 1803+), fall back to URL.
+    Linux: pipe the official install.sh — it auto-detects systemd and
+        sets up the service. Needs sudo for the systemd unit; users
+        without sudo will see install.sh's own error message.
+    """
+
+    if sys.platform == "darwin":
+        if which("brew"):
+            try:
+                run_streaming(["brew", "install", "ollama"], check=False)
+                return detect_ollama() is not None
+            except RuntimeError:
+                pass
+        info(
+            "Could not auto-install via brew. Download the macOS app from "
+            "https://ollama.com/download and re-run the bootstrap."
+        )
+        return False
+
+    if os.name == "nt":
+        if which("winget"):
+            try:
+                run_streaming(
+                    [
+                        "winget",
+                        "install",
+                        "-e",
+                        "--id",
+                        "Ollama.Ollama",
+                        "--accept-source-agreements",
+                        "--accept-package-agreements",
+                    ],
+                    check=False,
+                )
+                # winget puts ollama under %LOCALAPPDATA%\Programs\Ollama —
+                # may not be on PATH in this shell session yet.
+                local_app = os.environ.get("LOCALAPPDATA", "")
+                if local_app:
+                    candidate = Path(local_app) / "Programs" / "Ollama" / "ollama.exe"
+                    if candidate.exists():
+                        return True
+                return detect_ollama() is not None
+            except RuntimeError:
+                pass
+        info(
+            "Could not auto-install via winget. Download the Windows "
+            "installer from https://ollama.com/download and re-run."
+        )
+        return False
+
+    # Linux: piped curl | sh. install.sh handles systemd setup itself.
+    try:
+        result = subprocess.run(
+            "curl -fsSL https://ollama.com/install.sh | sh",
+            shell=True,
+            check=False,
+        )
+        return result.returncode == 0 and detect_ollama() is not None
+    except Exception:
+        return False
+
+
+def start_ollama_serve(wait_seconds: float = 15.0) -> bool:
+    """Spawn `ollama serve` in the background; wait for /api/version 200.
+
+    Returns False if the process couldn't be spawned, or if the daemon
+    isn't responding within ``wait_seconds``.
+    """
+
+    if ollama_running():
+        return True
+
+    ollama = detect_ollama()
+    if ollama is None:
+        return False
+
+    devnull = subprocess.DEVNULL
+    if os.name == "nt":
+        creationflags = (
+            getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        )
+        subprocess.Popen(  # noqa: S603 — known binary path from PATH
+            [ollama, "serve"],
+            creationflags=creationflags,
+            stdout=devnull,
+            stderr=devnull,
+            stdin=devnull,
+        )
+    else:
+        subprocess.Popen(  # noqa: S603 — known binary path from PATH
+            [ollama, "serve"],
+            start_new_session=True,
+            stdout=devnull,
+            stderr=devnull,
+            stdin=devnull,
+        )
+
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if ollama_running():
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def ollama_has_model(model: str) -> bool:
+    """Return True when the named model is already pulled.
+
+    Matches both the bare name (``bge-m3``) and the tagged form
+    (``bge-m3:latest``) so users who pulled with an explicit tag still
+    pass the check.
+    """
+
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False
+    for tag in data.get("models", []):
+        name = str(tag.get("name", "")).strip()
+        if name == model or name.startswith(f"{model}:"):
+            return True
+    return False
+
+
+def ollama_pull(model: str) -> bool:
+    """Pull a model via the ollama CLI (streams progress to stdout)."""
+
+    ollama = detect_ollama()
+    if ollama is None:
+        return False
+    try:
+        run_streaming([ollama, "pull", model], check=False)
+    except RuntimeError:
+        return False
+    return ollama_has_model(model)
+
+
+def ensure_ollama_ready(models: list[str]) -> dict[str, Any]:
+    """Detect → install → start → pull. Drives all four phases.
+
+    Returns a structured summary so the bootstrap can emit one
+    consolidated event. Each individual phase also emits its own event
+    (ollama_installed / ollama_serving / ollama_model_pulled / *_failed)
+    so an AI agent watching the JSON stream gets fine-grained progress.
+    """
+
+    summary: dict[str, Any] = {
+        "binary_path": "",
+        "installed_now": False,
+        "started_now": False,
+        "pulled": [],
+        "failed_pulls": [],
+        "running": False,
+    }
+
+    # Phase 1 — detect / install
+    binary = detect_ollama()
+    if binary is None:
+        info(
+            "Ollama not detected. Auto-installing now — this can take 1–3 "
+            "minutes depending on your network."
+        )
+        if not install_ollama():
+            emit(
+                BootstrapResult(
+                    "error",
+                    "ollama_install_failed",
+                    {
+                        "platform": sys.platform,
+                        "hint": (
+                            "Install Ollama manually from "
+                            "https://ollama.com/download then re-run the "
+                            "bootstrap. The rest of your config is already "
+                            "saved — re-running won't lose progress."
+                        ),
+                    },
+                )
+            )
+            return summary
+        binary = detect_ollama()
+        summary["installed_now"] = True
+        emit(BootstrapResult("ok", "ollama_installed", {"binary": binary or ""}))
+
+    summary["binary_path"] = binary or ""
+
+    # Phase 2 — start the daemon if not already up
+    if not ollama_running():
+        info("Starting 'ollama serve' in the background...")
+        if not start_ollama_serve():
+            emit(
+                BootstrapResult(
+                    "warning",
+                    "ollama_serve_failed",
+                    {
+                        "hint": (
+                            "Run 'ollama serve' manually in another terminal, "
+                            "then re-run the bootstrap."
+                        )
+                    },
+                )
+            )
+            return summary
+        summary["started_now"] = True
+        emit(BootstrapResult("ok", "ollama_serving", {"host": OLLAMA_HOST}))
+
+    summary["running"] = ollama_running()
+
+    # Phase 3 — pull the requested models
+    for model in models:
+        if not model:
+            continue
+        if ollama_has_model(model):
+            info(f"Ollama model '{model}' already pulled.")
+            summary["pulled"].append(model)
+            continue
+        info(f"Pulling Ollama model '{model}' (first time can take a few minutes)...")
+        if ollama_pull(model):
+            summary["pulled"].append(model)
+            emit(BootstrapResult("ok", "ollama_model_pulled", {"model": model}))
+        else:
+            summary["failed_pulls"].append(model)
+            emit(
+                BootstrapResult(
+                    "warning",
+                    "ollama_pull_failed",
+                    {
+                        "model": model,
+                        "hint": f"Run 'ollama pull {model}' manually and re-check.",
+                    },
+                )
+            )
+
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1007,6 +1288,24 @@ def run(args: argparse.Namespace) -> int:
     if mode == "auto":
         mode = "docker" if detect_docker() else "local"
     emit(BootstrapResult("ok", "mode_selected", {"mode": mode}))
+
+    # When the user picks ollama for either LLM or embedding, the install
+    # isn't really "done" until ollama is installed, the daemon is running,
+    # and the requested models are pulled. Without this step the user
+    # would land in a "config saved but nothing works" state.
+    #
+    # Inside Docker we deliberately skip this — the container talks to
+    # the *host's* ollama at host.docker.internal, and managing a host
+    # service from inside a container would be wrong.
+    ollama_models_needed: list[str] = []
+    if (args.provider or status["provider"]) == "ollama":
+        ollama_models_needed.append((args.llm_model or "llama3").strip())
+    if (args.embedding_provider or "").strip() == "ollama":
+        ollama_models_needed.append((args.embedding_model or "bge-m3").strip())
+    ollama_models_needed = [m for m in ollama_models_needed if m]
+    if ollama_models_needed and not args.skip_ollama_setup and mode != "docker":
+        ollama_summary = ensure_ollama_ready(ollama_models_needed)
+        emit(BootstrapResult("ok", "ollama_ready", ollama_summary))
 
     if not args.skip_install and mode == "local":
         try:

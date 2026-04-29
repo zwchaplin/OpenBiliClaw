@@ -4,6 +4,28 @@
 
 ---
 
+## v0.3.10: 选 Ollama 时一句话装机自己装 Ollama + 拉模型（2026-04-30）
+
+v0.3.6 把 Ollama 推荐成「新手默认」选项后，新问题来了：用户在向导里选了 Ollama，但实际上还得自己 `brew install ollama` / 装 Windows 安装包 / 跑 install.sh，再 `ollama pull llama3` —— 否则后端启动会卡在「Ollama not running」。这彻底违反了「一句话装机」的承诺。
+
+`agent_bootstrap.py` 现在内置 4 阶段 Ollama 自动化：
+
+1. **检测**：`shutil.which('ollama')` 找二进制
+2. **安装**（如果没装）：
+   - macOS → `brew install ollama`（没 brew 时报错并给出 https://ollama.com/download）
+   - Windows → `winget install -e --id Ollama.Ollama`（自动接受 EULA；没 winget 时报错给 URL）
+   - Linux → `curl -fsSL https://ollama.com/install.sh | sh`（官方脚本自带 systemd 配置）
+3. **启动 daemon**（如果没在跑）：后台 spawn `ollama serve`，轮询 `/api/version` 等最多 15s
+4. **拉模型**：检查 `/api/tags`，没拉的就 `ollama pull <name>`，进度流式打到 stdout
+
+每个阶段单独发 `BootstrapResult` 事件（`ollama_installed` / `ollama_serving` / `ollama_model_pulled`），AI agent 解析 JSON 流就能精确知道卡在哪一步。最后还会发一个汇总 `ollama_ready` 事件。
+
+触发条件：`--provider ollama` 或 `--embedding-provider ollama` 任一为真，且 `mode != docker`（Docker 模式下后端走 `host.docker.internal:11434` 找宿主 Ollama，自动装到容器内是错的）。新增 `--skip-ollama-setup` 给想自己管 Ollama 的用户兜底。
+
+`docs/agent-install.md` 同步：Option 1（Ollama）的指引从「让用户自己装」改成「我会帮你装」，embedding 段也明确告诉 AI agent 不要让用户手动 `ollama pull bge-m3`。
+
+---
+
 ## v0.3.9: 一句话装机适配 PowerShell 5.1（Win10/Win11 默认）（2026-04-30）
 
 之前的 `iwr <url> | iex` 一句话在 Windows 10 / 11 上没装 PowerShell 7 的用户那里直接挂——PS 5.1 默认走 TLS 1.0/1.1，但 GitHub 现在只接受 TLS 1.2+，握手失败报「underlying connection was closed」，新手根本看不懂。
