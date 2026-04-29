@@ -1039,8 +1039,9 @@ class TestDatabase:
 
             # Top 4 slots cover all four distinct topic groups
             assert set(topics[:4]) == {"人工智能", "自走棋", "纪录片", "人文历史"}
-            # AI cluster cannot monopolise — at most 3 of 6 even though it
-            # owns 5 of 9 source rows by raw relevance
+            # AI cluster cannot monopolise — capped at max_per_topic_group=3
+            # by the SQL filter, even though it owns 5 of 9 source rows by
+            # raw relevance.
             assert topics.count("人工智能") == 3
 
             db.close()

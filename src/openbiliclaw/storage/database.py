@@ -467,8 +467,25 @@ class Database:
         rows = self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=len(rows))
         return self._balance_pool_rows(rows, limit=limit)
 
-    def get_pool_candidates(self, limit: int = 20) -> list[dict[str, Any]]:
+    def get_pool_candidates(
+        self,
+        limit: int = 20,
+        *,
+        max_per_topic_group: int = 3,
+    ) -> list[dict[str, Any]]:
         """Get fresh recommendation candidates directly from the discovery pool.
+
+        ``max_per_topic_group`` caps how many items from any single
+        ``topic_group`` enter the relevance-ordered head. Without this
+        cap, a 600-item pool that contains 270 distinct topic_groups still
+        produces a top-50 shortlist concentrated in ~10 head groups,
+        because high-relevance candidates cluster around the user's
+        primary interests; long-tail groups (197 with a single item each
+        in the typical pool) never reach the candidate window. Cap of 3
+        lets obvious favourites keep a strong presence while opening
+        room for ~40+ different groups in the candidate window. Pass
+        ``max_per_topic_group=0`` to restore the legacy unrestricted
+        ordering for callers that need it (e.g. health checks).
 
         Notes:
             xhs rows without ``xsec_token`` in their ``content_url`` are
@@ -479,31 +496,78 @@ class Database:
             eligible again once ``_backfill_xhs_tokens`` upgrades them.
         """
         self._ensure_fresh_read()
-        cursor = self.conn.execute(
+        # Over-fetch widely so the per-group filter still leaves headroom
+        # for the downstream balance pass.
+        fetch_limit = max(limit * 8, 80)
+        if max_per_topic_group <= 0:
+            sql = """
+                SELECT *
+                FROM content_cache
+                WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+                  AND COALESCE(feedback_type, '') != 'dislike'
+                  AND (
+                    source_platform != 'xiaohongshu'
+                    OR content_url LIKE '%xsec_token=%'
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM recommendations AS r
+                    WHERE r.bvid = content_cache.bvid
+                  )
+                ORDER BY
+                    CASE candidate_tier WHEN 'primary' THEN 0 ELSE 1 END ASC,
+                    relevance_score DESC,
+                    last_scored_at DESC,
+                    view_count DESC,
+                    bvid ASC
+                LIMIT ?
             """
-            SELECT *
-            FROM content_cache
-            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
-              AND COALESCE(feedback_type, '') != 'dislike'
-              AND (
-                source_platform != 'xiaohongshu'
-                OR content_url LIKE '%xsec_token=%'
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                FROM recommendations AS r
-                WHERE r.bvid = content_cache.bvid
-              )
-            ORDER BY
-                CASE candidate_tier WHEN 'primary' THEN 0 ELSE 1 END ASC,
-                relevance_score DESC,
-                last_scored_at DESC,
-                view_count DESC,
-                bvid ASC
-            LIMIT ?
-            """,
-            (max(limit * 5, 50),),
-        )
+            params: tuple[Any, ...] = (fetch_limit,)
+        else:
+            # Per-group rank via window function: keep the top-N items of
+            # each topic_group (and all items with empty topic_group, which
+            # are untracked). Then order the remainder by relevance.
+            sql = """
+                WITH ranked AS (
+                    SELECT *,
+                           CASE
+                               WHEN COALESCE(topic_group, '') = '' THEN 1
+                               ELSE ROW_NUMBER() OVER (
+                                   PARTITION BY topic_group
+                                   ORDER BY
+                                       relevance_score DESC,
+                                       last_scored_at DESC,
+                                       view_count DESC,
+                                       bvid ASC
+                               )
+                           END AS group_rank
+                    FROM content_cache
+                    WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+                      AND COALESCE(feedback_type, '') != 'dislike'
+                      AND (
+                        source_platform != 'xiaohongshu'
+                        OR content_url LIKE '%xsec_token=%'
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM recommendations AS r
+                        WHERE r.bvid = content_cache.bvid
+                      )
+                )
+                SELECT * FROM ranked
+                WHERE
+                    COALESCE(topic_group, '') = ''
+                    OR group_rank <= ?
+                ORDER BY
+                    CASE candidate_tier WHEN 'primary' THEN 0 ELSE 1 END ASC,
+                    relevance_score DESC,
+                    last_scored_at DESC,
+                    view_count DESC,
+                    bvid ASC
+                LIMIT ?
+            """
+            params = (max_per_topic_group, fetch_limit)
+        cursor = self.conn.execute(sql, params)
         rows = [dict(row) for row in cursor.fetchall()]
         rows = self._exclude_viewed_rows(rows, self.get_recent_viewed_bvids(), limit=len(rows))
         return self._balance_pool_rows(rows, limit=limit)
@@ -858,8 +922,13 @@ class Database:
         sentinel) so that one dominant topic in the relevance head can't
         crowd out the candidate window. Source/platform are intentionally
         ignored — content-side features drive richness, not provenance.
+
+        The round-robin always runs (even when ``len(rows) <= limit``) so
+        that the returned ordering is balanced for downstream callers
+        that may sub-select; otherwise the SQL ordering can place several
+        items of the same topic back-to-back at the top.
         """
-        if limit <= 0 or len(rows) <= limit:
+        if limit <= 0 or len(rows) <= 1:
             return rows[:limit]
 
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
