@@ -610,7 +610,12 @@ class MemoryManager:
             event_type,
             url=event.get("url", ""),
             title=event.get("title", ""),
-            context=event.get("context", {}),
+            # v0.3.23+: ``context`` is a natural-language string from
+            # ``event_format.build_event()``. Default to empty string
+            # (was ``{}`` in v0.3.22 and earlier) so insert_event's
+            # smart encoder stores raw text instead of double-quoting
+            # the empty dict literal.
+            context=event.get("context", ""),
             metadata=event.get("metadata", {}),
         )
         # TODO: Check if preference layer needs updating

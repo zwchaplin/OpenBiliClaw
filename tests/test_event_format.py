@@ -248,6 +248,101 @@ def test_extension_ingested_events_normalise_dict_context() -> None:
     assert event["metadata"]["raw_context"] == raw_context_dict
 
 
+def test_event_db_round_trip_preserves_context_string_verbatim(tmp_path) -> None:
+    """v0.3.23+: regression for the JSON-double-encoding bug uncovered
+    after v0.3.22 unification.
+
+    Pre-v0.3.23 the database layer unconditionally json.dumps()'d the
+    context column. With the new string contract from build_event(),
+    a context like ``"在 B 站看了《讲透历史叙事》,作者:历史实验室"``
+    became ``'"在 B 站看了《讲透历史叙事》,作者:历史实验室"'`` in the
+    DB (literal outer quotes). When that round-tripped back through
+    json.dumps to the LLM prompt it became triple-escaped — visible
+    noise the model had to ignore.
+
+    This test pins the round-trip: build an event, insert via
+    propagate_event, query back, assert the context column value is
+    byte-identical to what build_event emitted.
+    """
+    import asyncio
+
+    from openbiliclaw.memory.manager import MemoryManager
+    from openbiliclaw.sources.event_format import (
+        SOURCE_BILIBILI,
+        SOURCE_XIAOHONGSHU,
+        build_event,
+    )
+    from openbiliclaw.storage.database import Database
+
+    db_path = tmp_path / "events.db"
+    db = Database(db_path)
+    db.initialize()
+    manager = MemoryManager(data_dir=tmp_path, database=db)
+
+    bili_event = build_event(
+        event_type="favorite",
+        source_platform=SOURCE_BILIBILI,
+        title="讲透历史叙事",
+        url="https://www.bilibili.com/video/BV1A",
+        author="历史实验室",
+        metadata={"bvid": "BV1A"},
+    )
+    xhs_event = build_event(
+        event_type="like",
+        source_platform=SOURCE_XIAOHONGSHU,
+        title="手冲咖啡入门",
+        url="https://www.xiaohongshu.com/explore/abc",
+        author="豆子老师",
+        context="小红书点赞:手冲咖啡入门 作者:豆子老师",
+    )
+    asyncio.run(manager.propagate_event(bili_event))
+    asyncio.run(manager.propagate_event(xhs_event))
+
+    rows = db.get_recent_events(limit=10)
+    assert len(rows) == 2
+    by_title = {row["title"]: row for row in rows}
+
+    # Critical: context column is the raw natural-language string,
+    # NOT a JSON-quoted version of it. This is what fixes the
+    # triple-encoding noise in LLM prompts.
+    assert by_title["讲透历史叙事"]["context"] == bili_event["context"]
+    assert by_title["手冲咖啡入门"]["context"] == xhs_event["context"]
+    # Sanity: no leading literal quote (was the bug signature)
+    assert not by_title["讲透历史叙事"]["context"].startswith('"')
+    assert not by_title["手冲咖啡入门"]["context"].startswith('"')
+
+
+def test_event_db_round_trip_legacy_dict_context_still_works(tmp_path) -> None:
+    """Backward compat: pre-v0.3.22 callers occasionally passed
+    dict-shaped context (extension click events with structured
+    payload). insert_event must still accept those — JSON-encoding
+    them on storage so the data isn't lost. Consumers reading the
+    column see a JSON-string they can json.loads if needed.
+    """
+    from openbiliclaw.storage.database import Database
+
+    db_path = tmp_path / "events.db"
+    db = Database(db_path)
+    db.initialize()
+
+    legacy_dict_context = {"video_id": "BV1", "ts": 12345}
+    db.insert_event(
+        "click",
+        title="legacy click",
+        context=legacy_dict_context,
+        metadata={"source_platform": "bilibili"},
+    )
+    rows = db.get_recent_events(limit=5)
+    assert rows
+    stored = rows[0]["context"]
+    # Stored as JSON-encoded string (not the raw dict, since SQLite
+    # column is TEXT). Consumer can json.loads to recover the dict.
+    import json
+
+    decoded = json.loads(stored)
+    assert decoded == legacy_dict_context
+
+
 def test_feedback_event_uses_natural_language_context() -> None:
     """v0.3.22+: /api/feedback now builds a custom context with the
     feedback verb (点赞/踩/评论) instead of leaving context empty.

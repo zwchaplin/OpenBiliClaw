@@ -183,14 +183,32 @@ class Database:
     def insert_event(self, event_type: str, **kwargs: Any) -> int:
         """Insert a behavioral event.
 
+        v0.3.23+: ``context`` is now a natural-language string (from
+        ``event_format.build_event()``). It's stored as raw text — no
+        outer JSON wrapping — so consumers reading via SELECT get back
+        the same string they put in. Pre-v0.3.22 callers that passed
+        dict-shaped context still work: dicts / lists / other non-string
+        values are JSON-encoded for storage so older code paths don't
+        suddenly lose data.
+
         Args:
             event_type: Type of event.
-            **kwargs: Additional event fields.
+            **kwargs: Additional event fields. ``context`` may be str,
+                dict, list, or None.
 
         Returns:
             Inserted row ID.
         """
         import json
+
+        raw_context = kwargs.get("context", "")
+        if isinstance(raw_context, str):
+            context_text = raw_context
+        elif raw_context is None:
+            context_text = ""
+        else:
+            # Legacy dict / list payload — JSON-encode for storage.
+            context_text = json.dumps(raw_context, ensure_ascii=False)
 
         cursor = self._execute_write(
             "INSERT INTO events (event_type, url, title, context, metadata) VALUES (?, ?, ?, ?, ?)",
@@ -198,7 +216,7 @@ class Database:
                 event_type,
                 kwargs.get("url", ""),
                 kwargs.get("title", ""),
-                json.dumps(kwargs.get("context", {}), ensure_ascii=False),
+                context_text,
                 json.dumps(kwargs.get("metadata", {}), ensure_ascii=False),
             ),
         )
@@ -1624,9 +1642,7 @@ class Database:
             # /api/recommendations cap how many same-franchise items
             # appear in a single response window — without relying on
             # any title-string heuristic or hardcoded alias list.
-            self.conn.execute(
-                "ALTER TABLE content_cache ADD COLUMN franchise_key TEXT DEFAULT ''"
-            )
+            self.conn.execute("ALTER TABLE content_cache ADD COLUMN franchise_key TEXT DEFAULT ''")
 
     def _ensure_content_cache_pool_copy_columns(self) -> None:
         """Backfill precomputed pool-copy fields for existing databases."""

@@ -102,7 +102,10 @@ class EventSimulator:
         # Fallback: direct LLM call
         messages = build_event_simulation_prompt(persona, event_count)
         response: LLMResponse = await self._llm.complete(
-            messages, temperature=0.8, max_tokens=8192, json_mode=True,
+            messages,
+            temperature=0.8,
+            max_tokens=8192,
+            json_mode=True,
         )
         return self._parse_response(response.content)
 
@@ -136,12 +139,16 @@ class EventSimulator:
             event_type = str(event.get("event_type", ""))
             if not event_type:
                 continue
-            result.append({
-                "event_type": event_type,
-                "title": str(event.get("title", "")),
-                "url": str(event.get("url", "")),
-                "metadata": event.get("metadata", {}),
-                "context": event.get("context", {}),
-            })
+            result.append(
+                {
+                    "event_type": event_type,
+                    "title": str(event.get("title", "")),
+                    "url": str(event.get("url", "")),
+                    "metadata": event.get("metadata", {}),
+                    # v0.3.23+: align eval simulator with the unified
+                    # event_format string contract. Was {}.
+                    "context": event.get("context", ""),
+                }
+            )
 
         return result
