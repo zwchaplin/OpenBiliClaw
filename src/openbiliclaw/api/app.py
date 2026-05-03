@@ -2107,9 +2107,12 @@ def create_app(
                 deepseek=_provider_out(cfg.llm.deepseek),
                 ollama=_provider_out(cfg.llm.ollama),
                 openrouter=_provider_out(cfg.llm.openrouter),
+                openai_compatible=_provider_out(cfg.llm.openai_compatible),
                 embedding=EmbeddingConfigOut(
                     provider=cfg.llm.embedding.provider,
                     model=cfg.llm.embedding.model,
+                    api_key=_mask(cfg.llm.embedding.api_key),
+                    base_url=cfg.llm.embedding.base_url,
                     similarity_threshold=cfg.llm.embedding.similarity_threshold,
                 ),
                 soul=ModuleLLMConfigOut(
@@ -2200,6 +2203,7 @@ def create_app(
                 "deepseek",
                 "ollama",
                 "openrouter",
+                "openai_compatible",
             ):
                 if provider_name in llm_data and isinstance(llm_data[provider_name], dict):
                     provider_cfg = getattr(cfg.llm, provider_name)
@@ -2213,6 +2217,17 @@ def create_app(
                     cfg.llm.embedding.provider = str(emb["provider"])
                 if "model" in emb:
                     cfg.llm.embedding.model = str(emb["model"])
+                # v0.3.32+ — embedding owns api_key/base_url. Skip the
+                # api_key write when the payload echoes back the masked
+                # value (e.g. ``sk-d****a826``) so we don't overwrite the
+                # real key with asterisks. A genuine API key never
+                # contains ``*``.
+                if "api_key" in emb:
+                    new_key = str(emb["api_key"])
+                    if "*" not in new_key:
+                        cfg.llm.embedding.api_key = new_key
+                if "base_url" in emb:
+                    cfg.llm.embedding.base_url = str(emb["base_url"])
                 if "similarity_threshold" in emb:
                     cfg.llm.embedding.similarity_threshold = float(emb["similarity_threshold"])
             for module_name in ("soul", "discovery", "recommendation", "evaluation"):

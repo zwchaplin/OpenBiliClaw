@@ -3374,6 +3374,57 @@ function bindSettings() {
     showProviderFields(providerSelect.value);
   });
 
+  // ── Embedding section: dynamic visibility + placeholder ──
+  // Mirrors the backend resolution order in
+  // src/openbiliclaw/llm/registry.py:_build_dedicated_embedding_provider.
+  const EMBEDDING_DEFAULT_MODEL = {
+    "": "留空 = 自动选择",
+    openai: "text-embedding-3-small",
+    gemini: "gemini-embedding-001",
+    ollama: "bge-m3",
+    openai_compatible: "bge-large-en-v1.5",
+  };
+  const EMBEDDING_BASE_URL_HINT = {
+    "": "留空使用默认",
+    openai: "留空 = https://api.openai.com/v1",
+    gemini: "(Gemini SDK 不需要 base_url)",
+    ollama: "http://localhost:11434/v1",
+    openai_compatible: "https://api.together.xyz/v1 / http://localhost:8000/v1",
+  };
+
+  function applyEmbeddingProviderUI() {
+    const select = document.getElementById("cfgEmbeddingProvider");
+    if (!select) return;
+    const provider = select.value;
+    const modelInput = document.getElementById("cfgEmbeddingModel");
+    if (modelInput) {
+      modelInput.placeholder =
+        EMBEDDING_DEFAULT_MODEL[provider] ?? "留空 = 自动选择";
+    }
+    const baseUrlInput = document.getElementById("cfgEmbeddingBaseUrl");
+    if (baseUrlInput) {
+      baseUrlInput.placeholder =
+        EMBEDDING_BASE_URL_HINT[provider] ?? "留空使用默认";
+    }
+    // Field visibility: ollama doesn't need an api_key; gemini doesn't
+    // use base_url. openai_compatible needs both (it's the whole point).
+    for (const el of overlay.querySelectorAll("[data-embedding-field]")) {
+      const field = el.dataset.embeddingField;
+      let visible = true;
+      if (provider === "ollama") {
+        visible = field !== "api_key";
+      } else if (provider === "gemini") {
+        visible = field !== "base_url";
+      }
+      el.style.display = visible ? "" : "none";
+    }
+  }
+
+  const embeddingProviderSelect = document.getElementById("cfgEmbeddingProvider");
+  if (embeddingProviderSelect) {
+    embeddingProviderSelect.addEventListener("change", applyEmbeddingProviderUI);
+  }
+
   function showToast(message, tone = "success") {
     toast.textContent = message;
     toast.dataset.tone = tone;
@@ -3418,12 +3469,18 @@ function bindSettings() {
     setVal("cfgOpenrouterKey", cfg.llm?.openrouter?.api_key);
     setVal("cfgOpenrouterModel", cfg.llm?.openrouter?.model);
     setVal("cfgOpenrouterBaseUrl", cfg.llm?.openrouter?.base_url);
+    setVal("cfgOpenaiCompatibleKey", cfg.llm?.openai_compatible?.api_key);
+    setVal("cfgOpenaiCompatibleModel", cfg.llm?.openai_compatible?.model);
+    setVal("cfgOpenaiCompatibleBaseUrl", cfg.llm?.openai_compatible?.base_url);
 
-    // Embedding
+    // Embedding (v0.3.32+ — owns its own api_key/base_url)
     const embProvider = document.getElementById("cfgEmbeddingProvider");
     if (embProvider) embProvider.value = cfg.llm?.embedding?.provider || "";
+    setVal("cfgEmbeddingApiKey", cfg.llm?.embedding?.api_key);
+    setVal("cfgEmbeddingBaseUrl", cfg.llm?.embedding?.base_url);
     setVal("cfgEmbeddingModel", cfg.llm?.embedding?.model);
     setVal("cfgEmbeddingSimilarity", cfg.llm?.embedding?.similarity_threshold);
+    applyEmbeddingProviderUI();
 
     // Bilibili
     const biliAuth = document.getElementById("cfgBiliAuth");
@@ -3486,8 +3543,15 @@ function bindSettings() {
           model: getVal("cfgOpenrouterModel"),
           base_url: getVal("cfgOpenrouterBaseUrl"),
         },
+        openai_compatible: {
+          api_key: getVal("cfgOpenaiCompatibleKey"),
+          model: getVal("cfgOpenaiCompatibleModel"),
+          base_url: getVal("cfgOpenaiCompatibleBaseUrl"),
+        },
         embedding: {
           provider: getVal("cfgEmbeddingProvider"),
+          api_key: getVal("cfgEmbeddingApiKey"),
+          base_url: getVal("cfgEmbeddingBaseUrl"),
           model: getVal("cfgEmbeddingModel"),
           similarity_threshold: parseFloat(getVal("cfgEmbeddingSimilarity")) || 0.82,
         },

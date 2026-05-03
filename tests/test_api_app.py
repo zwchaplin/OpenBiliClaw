@@ -2083,6 +2083,91 @@ class TestBackendAPI:
         assert cfg.llm.embedding.model == "text-embedding-3-small"
         assert cfg.llm.embedding.similarity_threshold == 0.78
 
+    def test_put_config_updates_embedding_credentials(
+        self,
+        monkeypatch,
+        tmp_path,
+    ) -> None:
+        """v0.3.32+ — embedding owns api_key/base_url. PUT /api/config
+        must accept the new fields and round-trip them through GET (with
+        the api_key masked on the way out)."""
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import (
+            Config,
+            EmbeddingConfig,
+            LLMConfig,
+            LLMProviderConfig,
+            save_config,
+        )
+
+        config_path = tmp_path / "config.toml"
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="deepseek",
+                deepseek=LLMProviderConfig(api_key="ds-key", model="deepseek-v4-flash"),
+                embedding=EmbeddingConfig(),
+            ),
+        )
+        save_config(cfg, config_path)
+
+        monkeypatch.setattr(
+            "openbiliclaw.config.load_config",
+            lambda *_a, **_kw: cfg,
+        )
+        monkeypatch.setattr(
+            "openbiliclaw.config.save_config",
+            lambda c, path=None: save_config(c, config_path),
+        )
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        # PUT — supply dedicated embedding credentials.
+        put_resp = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "embedding": {
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                        "api_key": "sk-dedicated-embedding-xyz1234567890",
+                        "base_url": "https://embed.example.com/v1",
+                    },
+                },
+            },
+        )
+        assert put_resp.status_code == 200
+        assert cfg.llm.embedding.api_key == "sk-dedicated-embedding-xyz1234567890"
+        assert cfg.llm.embedding.base_url == "https://embed.example.com/v1"
+
+        # GET (default — masked). api_key contains '*' but never the raw key.
+        get_resp = client.get("/api/config")
+        emb = get_resp.json()["llm"]["embedding"]
+        assert emb["provider"] == "openai"
+        assert emb["model"] == "text-embedding-3-small"
+        assert emb["base_url"] == "https://embed.example.com/v1"
+        assert "*" in emb["api_key"]
+        assert "sk-dedicated-embedding-xyz1234567890" not in emb["api_key"]
+
+        # PUT again with the masked key echoed back — must NOT overwrite
+        # the real key with asterisks.
+        masked_echo = emb["api_key"]
+        client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "embedding": {
+                        "api_key": masked_echo,
+                        "model": "text-embedding-3-large",
+                    },
+                },
+            },
+        )
+        # Real key preserved; model still updated.
+        assert cfg.llm.embedding.api_key == "sk-dedicated-embedding-xyz1234567890"
+        assert cfg.llm.embedding.model == "text-embedding-3-large"
+
     def test_put_config_updates_provider_api_key_and_model(
         self,
         monkeypatch,
@@ -2140,3 +2225,438 @@ class TestBackendAPI:
         assert cfg.llm.deepseek.api_key == "sk-new-deepseek-key"
         assert cfg.llm.deepseek.model == "deepseek-chat"
         assert cfg.llm.deepseek.base_url == "https://api.deepseek.com"
+
+
+class TestEmbeddingAndCompatProviderE2E:
+    """End-to-end coverage for the v0.3.32 changes through the HTTP boundary.
+
+    Two related shifts ship in v0.3.32:
+
+      1. ``[llm.embedding]`` owns its own ``api_key`` / ``base_url`` —
+         embedding is fully decoupled from the chat ``[llm.<provider>]``
+         blocks.
+      2. ``openai_compatible`` becomes a first-class registered provider
+         (separate ``[llm.openai_compatible]`` block, distinct registry
+         entry from ``openai``) — Groq / Together / Azure OpenAI / vLLM
+         and friends get a dedicated home instead of hijacking
+         ``[llm.openai].base_url``.
+
+    These tests exercise both end-to-end through ``/api/config`` so we
+    catch any regression in serialization, masking, partial-update
+    merging, hot-reload, or ConfigIssue surfacing.
+    """
+
+    @staticmethod
+    def _make_client(monkeypatch, tmp_path, initial_cfg):
+        """Wire up a TestClient with load_config/save_config patched to
+        round-trip against a real on-disk config in tmp_path."""
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import save_config
+
+        config_path = tmp_path / "config.toml"
+        save_config(initial_cfg, config_path)
+
+        # `cfg` is a single mutable instance that both load_config and
+        # save_config see — that mirrors how the FastAPI lifecycle reads
+        # one config object and mutates it in place across requests.
+        monkeypatch.setattr(
+            "openbiliclaw.config.load_config",
+            lambda *_a, **_kw: initial_cfg,
+        )
+        monkeypatch.setattr(
+            "openbiliclaw.config.save_config",
+            lambda c, path=None: save_config(c, config_path),
+        )
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        return TestClient(app)
+
+    # ── GET masking & shape ─────────────────────────────────────────
+
+    def test_get_config_exposes_openai_compatible_block(self, monkeypatch, tmp_path) -> None:
+        """The /api/config response must include the new
+        [llm.openai_compatible] block so the popup can populate its
+        fields. api_key is masked by default."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="openai",
+                openai=LLMProviderConfig(api_key="sk-real-openai-1234567890"),
+                openai_compatible=LLMProviderConfig(
+                    api_key="gsk-groq-secret-key-1234567890",
+                    model="llama-3.1-70b-versatile",
+                    base_url="https://api.groq.com/openai/v1",
+                ),
+            ),
+        )
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        response = client.get("/api/config")
+        assert response.status_code == 200
+        data = response.json()
+
+        compat = data["llm"]["openai_compatible"]
+        # Shape: all expected fields are present, with the api_key masked
+        # but model / base_url surfaced verbatim.
+        assert compat["model"] == "llama-3.1-70b-versatile"
+        assert compat["base_url"] == "https://api.groq.com/openai/v1"
+        assert "*" in compat["api_key"]
+        assert "gsk-groq-secret-key-1234567890" not in compat["api_key"]
+
+    def test_get_config_exposes_embedding_credentials_masked(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """v0.3.32+ embedding owns api_key/base_url. They must surface
+        in /api/config (so the popup knows what's configured) with
+        api_key masked."""
+        from openbiliclaw.config import (
+            Config,
+            EmbeddingConfig,
+            LLMConfig,
+            LLMProviderConfig,
+        )
+
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="deepseek",
+                deepseek=LLMProviderConfig(api_key="ds-key"),
+                embedding=EmbeddingConfig(
+                    provider="openai",
+                    model="text-embedding-3-large",
+                    api_key="sk-embed-secret-1234567890",
+                    base_url="https://api.openai.com/v1",
+                    similarity_threshold=0.91,
+                ),
+            ),
+        )
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        response = client.get("/api/config")
+        emb = response.json()["llm"]["embedding"]
+
+        assert emb["provider"] == "openai"
+        assert emb["model"] == "text-embedding-3-large"
+        assert emb["base_url"] == "https://api.openai.com/v1"
+        assert emb["similarity_threshold"] == 0.91
+        assert "*" in emb["api_key"]
+        assert "sk-embed-secret-1234567890" not in emb["api_key"]
+
+    def test_get_config_with_reveal_keys_returns_raw_secrets(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """``GET /api/config?reveal_keys=true`` returns unmasked keys
+        for both new fields (openai_compatible.api_key + embedding.api_key).
+        Used by the popup when the user clicks "show" to edit."""
+        from openbiliclaw.config import (
+            Config,
+            EmbeddingConfig,
+            LLMConfig,
+            LLMProviderConfig,
+        )
+
+        cfg = Config(
+            llm=LLMConfig(
+                openai_compatible=LLMProviderConfig(
+                    api_key="gsk-raw-1234567890",
+                    base_url="https://api.groq.com/openai/v1",
+                ),
+                embedding=EmbeddingConfig(api_key="sk-emb-raw-1234567890"),
+            ),
+        )
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        revealed = client.get("/api/config", params={"reveal_keys": "true"}).json()
+        assert revealed["llm"]["openai_compatible"]["api_key"] == "gsk-raw-1234567890"
+        assert revealed["llm"]["embedding"]["api_key"] == "sk-emb-raw-1234567890"
+
+    # ── PUT round-trip: openai_compatible ───────────────────────────
+
+    def test_put_openai_compatible_round_trips_through_get(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """PUT a full [llm.openai_compatible] block, then GET — the
+        non-secret fields come back identical, api_key comes back
+        masked but the in-memory config object holds the real value."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(llm=LLMConfig(openai=LLMProviderConfig(api_key="sk-openai")))
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        put_resp = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "default_provider": "openai_compatible",
+                    "openai_compatible": {
+                        "api_key": "gsk-fresh-groq-key-1234567890",
+                        "model": "llama-3.1-70b-versatile",
+                        "base_url": "https://api.groq.com/openai/v1",
+                    },
+                },
+            },
+        )
+        assert put_resp.status_code == 200
+        body = put_resp.json()
+        assert body["ok"] is True
+
+        # In-memory config has the real key
+        assert cfg.llm.default_provider == "openai_compatible"
+        assert cfg.llm.openai_compatible.api_key == "gsk-fresh-groq-key-1234567890"
+        assert cfg.llm.openai_compatible.model == "llama-3.1-70b-versatile"
+        assert cfg.llm.openai_compatible.base_url == "https://api.groq.com/openai/v1"
+
+        # Subsequent GET round-trips with masking
+        get_resp = client.get("/api/config")
+        compat = get_resp.json()["llm"]["openai_compatible"]
+        assert compat["model"] == "llama-3.1-70b-versatile"
+        assert compat["base_url"] == "https://api.groq.com/openai/v1"
+        assert "*" in compat["api_key"]
+        assert "gsk-fresh-groq-key-1234567890" not in compat["api_key"]
+
+    def test_put_openai_compatible_does_not_stomp_openai_block(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Partial PUT with only [llm.openai_compatible] must NOT clear
+        the existing [llm.openai] block. Both providers can coexist
+        (the whole point of the v0.3.32 split)."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(
+            llm=LLMConfig(
+                default_provider="openai",
+                openai=LLMProviderConfig(
+                    api_key="sk-original-openai-1234567890",
+                    model="gpt-5-nano",
+                    base_url="",
+                ),
+            ),
+        )
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "openai_compatible": {
+                        "api_key": "gsk-groq-1234567890",
+                        "model": "llama-3.1-70b-versatile",
+                        "base_url": "https://api.groq.com/openai/v1",
+                    },
+                },
+            },
+        )
+
+        # openai block survived intact
+        assert cfg.llm.openai.api_key == "sk-original-openai-1234567890"
+        assert cfg.llm.openai.model == "gpt-5-nano"
+        assert cfg.llm.default_provider == "openai"  # unchanged
+        # openai_compatible block freshly populated
+        assert cfg.llm.openai_compatible.api_key == "gsk-groq-1234567890"
+        assert cfg.llm.openai_compatible.base_url == "https://api.groq.com/openai/v1"
+
+    # ── ConfigIssue surfacing ───────────────────────────────────────
+
+    def test_put_default_openai_compatible_without_base_url_surfaces_issue(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """If the user picks openai_compatible as default but forgets
+        base_url, ``_collect_config_issues`` flags it and the issue
+        appears in the PUT response so the popup can highlight the
+        offending field — without this, the bad config would silently
+        save and the daemon would 401 against api.openai.com on first
+        request."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(llm=LLMConfig(openai=LLMProviderConfig(api_key="sk-openai")))
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        resp = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "default_provider": "openai_compatible",
+                    "openai_compatible": {
+                        "api_key": "gsk-test",
+                        "model": "llama-3.1-70b-versatile",
+                        # base_url deliberately omitted
+                    },
+                },
+            },
+        )
+        assert resp.status_code == 200
+
+        issues = resp.json()["config"]["issues"]
+        fields = [i["field"] for i in issues]
+        assert "llm.openai_compatible.base_url" in fields, (
+            f"expected base_url issue in {fields}"
+        )
+
+    # ── Embedding round-trip + masked-echo protection ───────────────
+
+    def test_put_embedding_via_openai_compatible_round_trip(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Embedding can independently target an openai_compatible
+        backend (vLLM / Together / Azure OpenAI), with its own api_key
+        and base_url — no need to also fill [llm.openai_compatible]."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(llm=LLMConfig(openai=LLMProviderConfig(api_key="sk-openai")))
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        put = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "embedding": {
+                        "provider": "openai_compatible",
+                        "model": "bge-large-en-v1.5",
+                        "api_key": "vllm-token-1234567890",
+                        "base_url": "http://vllm.internal:8000/v1",
+                        "similarity_threshold": 0.85,
+                    },
+                },
+            },
+        )
+        assert put.status_code == 200
+        assert cfg.llm.embedding.provider == "openai_compatible"
+        assert cfg.llm.embedding.api_key == "vllm-token-1234567890"
+        assert cfg.llm.embedding.base_url == "http://vllm.internal:8000/v1"
+        assert cfg.llm.embedding.similarity_threshold == 0.85
+
+        # Round-trip via GET — base_url + provider + threshold come back
+        # raw, api_key masked.
+        emb = client.get("/api/config").json()["llm"]["embedding"]
+        assert emb["provider"] == "openai_compatible"
+        assert emb["base_url"] == "http://vllm.internal:8000/v1"
+        assert emb["similarity_threshold"] == 0.85
+        assert "*" in emb["api_key"]
+        assert "vllm-token-1234567890" not in emb["api_key"]
+
+    def test_put_embedding_masked_echo_does_not_overwrite_real_key(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Workflow: open settings → backend returns masked key → user
+        edits an unrelated field (model) → submits — the masked api_key
+        gets echoed back. Backend must detect the mask (any '*') and
+        keep the real key. Otherwise every save would silently destroy
+        the user's secret."""
+        from openbiliclaw.config import (
+            Config,
+            EmbeddingConfig,
+            LLMConfig,
+            LLMProviderConfig,
+        )
+
+        cfg = Config(
+            llm=LLMConfig(
+                openai=LLMProviderConfig(api_key="sk-openai"),
+                embedding=EmbeddingConfig(
+                    provider="openai",
+                    model="text-embedding-3-small",
+                    api_key="sk-real-secret-do-not-overwrite-1234567890",
+                    base_url="",
+                ),
+            ),
+        )
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        # Step 1 — popup loads the config and gets a masked key.
+        masked = client.get("/api/config").json()["llm"]["embedding"]["api_key"]
+        assert "*" in masked
+
+        # Step 2 — popup re-submits with the masked key and a new model.
+        client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "embedding": {
+                        "api_key": masked,
+                        "model": "text-embedding-3-large",
+                    },
+                },
+            },
+        )
+
+        # Real key preserved; the model field still updated.
+        assert cfg.llm.embedding.api_key == "sk-real-secret-do-not-overwrite-1234567890"
+        assert cfg.llm.embedding.model == "text-embedding-3-large"
+
+    # ── Hot-reload verification ─────────────────────────────────────
+
+    def test_put_triggers_runtime_hot_reload(self, monkeypatch, tmp_path) -> None:
+        """``rebuild_from_config`` must run successfully when the new
+        config is valid (here: openai default with api_key set). The
+        ``reloaded=true`` flag in the response is the externally
+        observable signal that the registry was actually rebuilt — the
+        popup uses this to decide whether to show "立即生效" vs "重启
+        生效" feedback."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(llm=LLMConfig(openai=LLMProviderConfig(api_key="sk-old")))
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        resp = client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "default_provider": "openai_compatible",
+                    "openai_compatible": {
+                        "api_key": "gsk-new",
+                        "model": "llama-3.1-70b-versatile",
+                        "base_url": "https://api.groq.com/openai/v1",
+                    },
+                },
+            },
+        )
+        body = resp.json()
+        assert body["reloaded"] is True, (
+            f"expected hot-reload to succeed, got message: {body['message']}"
+        )
+
+    # ── Coexistence: both providers usable in one config ────────────
+
+    def test_get_after_dual_put_returns_both_provider_blocks(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Set both [llm.openai] (real OpenAI for chat) and
+        [llm.openai_compatible] (Groq for fast drafting) in one PUT.
+        Both blocks must round-trip independently — the v0.3.32 split
+        explicitly enables this dual-stack scenario."""
+        from openbiliclaw.config import Config, LLMConfig
+
+        cfg = Config(llm=LLMConfig())
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        client.put(
+            "/api/config",
+            json={
+                "llm": {
+                    "default_provider": "openai",
+                    "openai": {
+                        "api_key": "sk-real-openai-1234567890",
+                        "model": "gpt-5-nano",
+                    },
+                    "openai_compatible": {
+                        "api_key": "gsk-groq-1234567890",
+                        "model": "llama-3.1-70b-versatile",
+                        "base_url": "https://api.groq.com/openai/v1",
+                    },
+                },
+            },
+        )
+
+        data = client.get("/api/config").json()["llm"]
+        assert data["default_provider"] == "openai"
+        # Two distinct masked secrets, each pointing at its own block.
+        assert data["openai"]["model"] == "gpt-5-nano"
+        assert data["openai_compatible"]["model"] == "llama-3.1-70b-versatile"
+        assert data["openai_compatible"]["base_url"] == "https://api.groq.com/openai/v1"
+        # api_keys are both masked but distinct (different last 4 chars
+        # in the mask), proving they're stored as separate values.
+        openai_mask = data["openai"]["api_key"]
+        compat_mask = data["openai_compatible"]["api_key"]
+        assert "*" in openai_mask and "*" in compat_mask
+        assert openai_mask != compat_mask

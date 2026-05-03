@@ -436,6 +436,9 @@ class LLMProviderConfigOut(BaseModel):
 class EmbeddingConfigOut(BaseModel):
     provider: str = ""
     model: str = ""
+    # v0.3.32+ embedding owns its own credentials; api_key is masked.
+    api_key: str = ""
+    base_url: str = ""
     similarity_threshold: float = 0.82
 
 
@@ -452,6 +455,8 @@ class LLMConfigOut(BaseModel):
     deepseek: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     ollama: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     openrouter: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
+    # v0.3.32+ — generic OpenAI-protocol-compatible provider.
+    openai_compatible: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     embedding: EmbeddingConfigOut = Field(default_factory=EmbeddingConfigOut)
     soul: ModuleLLMConfigOut = Field(default_factory=ModuleLLMConfigOut)
     discovery: ModuleLLMConfigOut = Field(default_factory=ModuleLLMConfigOut)

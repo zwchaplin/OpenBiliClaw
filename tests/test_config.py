@@ -265,6 +265,71 @@ def test_validate_runtime_config_requires_openrouter_api_key() -> None:
         validate_runtime_config(config)
 
 
+def test_build_config_supports_openai_compatible_provider() -> None:
+    """v0.3.32+ — generic OpenAI-protocol-compatible provider with its
+    own [llm.openai_compatible] block. Distinct from [llm.openai]."""
+    config = _build_config(
+        {
+            "llm": {
+                "default_provider": "openai_compatible",
+                "openai": {"api_key": "real-openai-key"},
+                "openai_compatible": {
+                    "api_key": "gsk-groq-test",
+                    "model": "llama-3.1-70b-versatile",
+                    "base_url": "https://api.groq.com/openai/v1",
+                },
+            }
+        }
+    )
+
+    assert config.llm.default_provider == "openai_compatible"
+    assert config.llm.openai_compatible.api_key == "gsk-groq-test"
+    assert config.llm.openai_compatible.model == "llama-3.1-70b-versatile"
+    assert config.llm.openai_compatible.base_url == "https://api.groq.com/openai/v1"
+    # The two blocks stay independent — adding openai_compatible does
+    # not stomp on [llm.openai].
+    assert config.llm.openai.api_key == "real-openai-key"
+
+
+def test_save_config_round_trips_openai_compatible(tmp_path: Path) -> None:
+    """[llm.openai_compatible] must survive a save/load cycle so popup
+    edits don't get silently dropped on backend restart."""
+    config_path = tmp_path / "config.toml"
+    config = Config()
+    config.llm.openai_compatible.api_key = "gsk-test-key"
+    config.llm.openai_compatible.model = "qwen2.5-72b-instruct"
+    config.llm.openai_compatible.base_url = "https://api.together.xyz/v1"
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.llm.openai_compatible.api_key == "gsk-test-key"
+    assert loaded.llm.openai_compatible.model == "qwen2.5-72b-instruct"
+    assert loaded.llm.openai_compatible.base_url == "https://api.together.xyz/v1"
+
+
+def test_collect_issues_flags_missing_base_url_for_openai_compatible() -> None:
+    """openai_compatible without a base_url is meaningless — it would
+    just hit api.openai.com with the wrong key. Surface a config issue
+    so the user fixes it before the daemon starts."""
+    from openbiliclaw.config import _collect_config_issues
+
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai_compatible",
+            openai_compatible=LLMProviderConfig(
+                api_key="gsk-test-key",
+                model="llama-3.1-70b-versatile",
+                base_url="",  # ← missing
+            ),
+        )
+    )
+
+    issues = _collect_config_issues(config)
+    fields = [i.field for i in issues]
+    assert "llm.openai_compatible.base_url" in fields
+
+
 def test_build_config_supports_gemini_provider() -> None:
     config = _build_config(
         {
@@ -427,3 +492,57 @@ def test_save_config_round_trips_runtime_changes(tmp_path: Path) -> None:
     assert loaded.llm.default_provider == "gemini"
     assert loaded.llm.gemini.api_key == "gemini-test-key"
     assert loaded.llm.gemini.model == "gemini-2.5-flash"
+
+
+def test_save_config_round_trips_embedding_credentials(tmp_path: Path) -> None:
+    """v0.3.32+ EmbeddingConfig owns api_key/base_url. They must survive
+    a save/load round-trip — otherwise the popup's PUT /api/config would
+    silently lose the user's dedicated embedding credentials on restart."""
+    config_path = tmp_path / "config.toml"
+    config = Config()
+    config.llm.embedding.provider = "openai"
+    config.llm.embedding.model = "text-embedding-3-small"
+    config.llm.embedding.api_key = "sk-dedicated-embedding-xyz"
+    config.llm.embedding.base_url = "https://embed.example.com/v1"
+    config.llm.embedding.similarity_threshold = 0.91
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.llm.embedding.provider == "openai"
+    assert loaded.llm.embedding.model == "text-embedding-3-small"
+    assert loaded.llm.embedding.api_key == "sk-dedicated-embedding-xyz"
+    assert loaded.llm.embedding.base_url == "https://embed.example.com/v1"
+    assert loaded.llm.embedding.similarity_threshold == 0.91
+
+
+def test_load_config_accepts_legacy_embedding_section_without_api_key(
+    tmp_path: Path,
+) -> None:
+    """Pre-v0.3.32 configs only have provider/model/similarity_threshold
+    in [llm.embedding]. Loading must still succeed and the new fields
+    default to empty strings (which triggers the back-compat fallback in
+    build_embedding_service)."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[llm]
+default_provider = "ollama"
+
+[llm.ollama]
+model = "llama3"
+base_url = "http://localhost:11434/v1"
+
+[llm.embedding]
+provider = "ollama"
+model = ""
+similarity_threshold = 0.88
+""".strip()
+    )
+
+    loaded = load_config(config_path)
+
+    assert loaded.llm.embedding.provider == "ollama"
+    assert loaded.llm.embedding.api_key == ""
+    assert loaded.llm.embedding.base_url == ""
+    assert loaded.llm.embedding.similarity_threshold == 0.88

@@ -4,6 +4,25 @@
 
 ---
 
+## v0.3.32: Embedding 与 LLM Provider 解耦 + OpenAI 协议兼容 provider（2026-05-04）
+
+### 改动
+
+- **`[llm.embedding]` 拥有独立的 `api_key` / `base_url`**：embedding 不再借用 `[llm.<provider>]` 的连接，避免「想用 OpenAI 跑 embedding 但 chat 走 DeepSeek」时被迫在两处填同一个块。`build_embedding_service` 直接根据 `[llm.embedding]` 构造一个独立 provider 实例，与 chat 端 `LLMRegistry` 完全解耦。
+- **新增 `openai_compatible` 一级 provider**：用于接入 Groq / Together / Azure OpenAI / vLLM / 自建等任何走 OpenAI 协议的服务。和 `[llm.openai]` 完全独立（不再用 base_url override 复用 openai block），可以同时在一个项目里跑两套（chat 用真 OpenAI、辅助任务挂 Groq 加速）。`base_url` 必填，缺失会被 `_collect_config_issues` 拦下，避免 401 hit `api.openai.com`。Embedding 段也支持选 `openai_compatible`（多数 OpenAI-compat 后端都暴露 `/v1/embeddings`，比如 Together、vLLM、Azure）。
+- **向后兼容回落**：老 config（仅设了 `[llm.embedding] provider` 没填 api_key）仍可工作 —— 透明回落到 `[llm.<provider>].api_key`，并打一条一次性 WARNING 提示迁移；下个大版本会移除该回落。
+- **删掉 `embedding_wants_ollama` 自动注册 hack**：embedding 现在自己构造 Ollama，chat registry 不再因为 `[llm.embedding] provider="ollama"` 而被强插一条 embedding-only 条目。
+- **API 层 `EmbeddingConfigOut` 暴露 `api_key`（已脱敏）+ `base_url`**：`PUT /api/config` 接受新字段；`api_key` 字段若收到含 `*` 的回显（脱敏值原样回写），保留原值不覆盖。
+- **扩展 popup Embedding 段**：新增 `EMBEDDING API KEY` / `BASE URL` 字段；provider 切换时联动模型 placeholder（`bge-m3` / `text-embedding-3-small` / `gemini-embedding-001`）和字段可见性（Ollama 隐藏 api_key、Gemini 隐藏 base_url）。删除 OpenRouter 选项（无 embedding 接口）。
+- **配置渲染 / 加载同步更新**：`save_config` 写出新字段，`_build_config` 接受新字段；老 TOML（无新字段）正常加载，新字段默认 `""`。
+
+### 影响
+
+- 跑老 config 的用户首次启动会看到一条 `[llm.embedding] api_key/base_url is empty — falling back to [llm.<x>] credentials. ...` 的 WARNING；行为不变，按提示把凭据搬到 `[llm.embedding]` 即可消失。
+- `setup-embedding` 向导和扩展的 GET/PUT `/api/config` 调用方式均无破坏性改动。
+
+---
+
 ## v0.3.31: Discovery 来源均衡兼容小红书（2026-05-03）
 
 ### 修复

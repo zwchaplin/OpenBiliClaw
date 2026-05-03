@@ -83,14 +83,39 @@ cp config.example.toml config.toml
 
 > `http_referer` 和 `x_title` 都是可选项；留空时不会阻止请求发送。
 
+### `[llm.openai_compatible]` (v0.3.32+)
+
+通用 OpenAI 协议兼容 provider，用于接入 Groq / Together / Azure OpenAI / vLLM / 自建等任何兼容 `/v1/chat/completions` 的服务。**与 `[llm.openai]` 完全独立**：cost 统计、retry 计数、provider 名都各自一份，可以同时在一个 backend 里跑两套（例：chat 走真 OpenAI 跑 `gpt-5-nano`，draft 任务挂 Groq 跑 Llama 加速）。
+
+| 键 | 类型 | 默认值 | 说明 |
+|----|------|--------|------|
+| `api_key` | string | `""` | 上游服务的 API Key（default_provider=openai_compatible 时必填） |
+| `model` | string | `""` | 上游服务的模型名（如 `llama-3.1-70b-versatile`、`Qwen/Qwen2.5-72B-Instruct-Turbo`、Azure 部署名等） |
+| `base_url` | string | `""` | **必填**。上游服务的 OpenAI 协议端点（缺失时 `_collect_config_issues` 会报 `llm.openai_compatible.base_url`，registry 拒绝注册） |
+
+常见示例：
+
+| 服务 | base_url | model 示例 |
+|------|----------|-----------|
+| Groq | `https://api.groq.com/openai/v1` | `llama-3.1-70b-versatile` |
+| Together | `https://api.together.xyz/v1` | `Qwen/Qwen2.5-72B-Instruct-Turbo` |
+| Azure OpenAI | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` | `(matches deployment name)` |
+| vLLM 自建 | `http://localhost:8000/v1` | `(vLLM 加载的模型名)` |
+
+`[llm.embedding].provider` 也接受 `openai_compatible`：多数 OpenAI-compat 后端（Together / vLLM / Azure）都暴露 `/v1/embeddings`，可以直接挂上来，与 chat 用同一组 base_url 也行（互相独立的 provider 实例）。
+
 ### `[llm.embedding]`
 
 Embedding 服务用于多个语义任务：discovery 内容兴趣预过滤、recommendation 跨主题去重、PoolCurator 反馈相似度判定、interest probe 主题归类。
 
+**v0.3.32+ 起，本段拥有独立的 `api_key` / `base_url`，与 `[llm].default_provider` 完全解耦。** 不再被迫为「embedding 用 OpenAI 但 chat 用 DeepSeek」这种场景在两处填同一组凭据。
+
 | 键 | 类型 | 默认值 | 说明 |
 |----|------|--------|------|
-| `provider` | string | `""` | 留空 = 跟随 `[llm].default_provider`；填 `"ollama"` 启用本地 Ollama 作 embedding 兜底 |
+| `provider` | string | `""` | 留空 = 跟随 `[llm].default_provider`；填 `"openai"` / `"gemini"` / `"ollama"`。Claude / DeepSeek / OpenRouter 没有 embedding 接口 |
 | `model` | string | `"gemini-embedding-001"` | embedding 模型名；按 provider 自动填合理默认：`gemini → gemini-embedding-001` / `openai → text-embedding-3-small` / `ollama → bge-m3` |
+| `api_key` | string | `""` | v0.3.32+ embedding 专属 API Key。留空走向后兼容路径（借用 `[llm.<provider>].api_key`，并打一条一次性 WARNING）。Ollama 不需要 |
+| `base_url` | string | `""` | v0.3.32+ embedding 专属 base URL。留空使用 provider 默认值（OpenAI → `api.openai.com/v1`、Ollama → `localhost:11434/v1`）。Gemini SDK 忽略此字段 |
 | `similarity_threshold` | float | `0.82` | 余弦相似度阈值，超过即视为"同主题" |
 
 #### 启用本地 Ollama embedding（v0.3.0+，**v0.3.3 起真实生效**）

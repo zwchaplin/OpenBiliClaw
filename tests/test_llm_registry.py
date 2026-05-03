@@ -89,6 +89,91 @@ def test_build_llm_registry_registers_openrouter() -> None:
     assert "openrouter" in registry.available_providers
 
 
+def test_build_llm_registry_registers_openai_compatible() -> None:
+    """v0.3.32+ — openai_compatible is a first-class registered provider,
+    distinct from openai. Both can coexist in the same registry."""
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai_compatible",
+            openai=LLMProviderConfig(api_key="sk-real-openai"),
+            openai_compatible=LLMProviderConfig(
+                api_key="gsk-groq-test",
+                model="llama-3.1-70b-versatile",
+                base_url="https://api.groq.com/openai/v1",
+            ),
+        )
+    )
+    registry = build_llm_registry(config)
+
+    assert registry.default_provider == "openai_compatible"
+    # Both providers coexist as independent registry entries.
+    assert "openai" in registry.available_providers
+    assert "openai_compatible" in registry.available_providers
+
+    # The two are different OpenAIProvider *instances* with different
+    # name and base_url — this is what guarantees billing / cost stats
+    # don't collapse them.
+    openai = registry.get("openai")
+    compat = registry.get("openai_compatible")
+    assert openai.name == "openai"
+    assert compat.name == "openai_compatible"
+    assert openai is not compat
+    assert compat.base_url == "https://api.groq.com/openai/v1"
+
+
+def test_build_llm_registry_refuses_openai_compatible_without_base_url() -> None:
+    """A Groq / Together / vLLM provider WITHOUT a base_url is just an
+    expensive way of mistyping ``openai`` — it would hit api.openai.com
+    with the wrong api_key and 401. Refuse to register so the failure is
+    surfaced at startup, not on the first chat request."""
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai",
+            openai=LLMProviderConfig(api_key="sk-openai"),
+            openai_compatible=LLMProviderConfig(
+                api_key="gsk-groq-test",
+                model="llama-3.1-70b-versatile",
+                base_url="",  # ← missing
+            ),
+        )
+    )
+    registry = build_llm_registry(config)
+    assert "openai_compatible" not in registry.available_providers
+
+
+def test_openai_compatible_can_serve_as_embedding_provider(tmp_path) -> None:
+    """Most OpenAI-compat backends (Together, vLLM, Azure) expose
+    /v1/embeddings. ``openai_compatible`` must therefore be valid as
+    [llm.embedding].provider — the embedding service builds a dedicated
+    instance pointing at the user-supplied base_url."""
+    from openbiliclaw.config import EmbeddingConfig
+
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai",
+            openai=LLMProviderConfig(api_key="sk-openai"),
+            embedding=EmbeddingConfig(
+                provider="openai_compatible",
+                model="bge-large-en-v1.5",
+                api_key="vllm-token",
+                base_url="http://localhost:8000/v1",
+            ),
+        ),
+        data_dir=str(tmp_path),
+    )
+    registry = build_llm_registry(config)
+    service = build_embedding_service(config, registry)
+
+    assert service is not None
+    assert service._provider.name == "openai_compatible"
+    assert service._model == "bge-large-en-v1.5"
+    # Built against the embedding-section base_url, not [llm.openai].
+    assert str(service._provider._client.base_url).rstrip("/") == (
+        "http://localhost:8000/v1"
+    )
+    assert service._provider._client.api_key == "vllm-token"
+
+
 @pytest.mark.skipif(not gemini_sdk_available(), reason="google-genai is not installed")
 def test_build_llm_registry_registers_gemini() -> None:
     config = Config(
@@ -165,16 +250,25 @@ def test_build_llm_registry_registers_ollama_when_base_url_is_explicit() -> None
     assert registry.available_providers == ["ollama"]
 
 
-def test_build_llm_registry_auto_registers_ollama_when_embedding_wants_it() -> None:
-    """If [llm.embedding] provider="ollama" but [llm.ollama] is empty, the
-    registry must still register Ollama — otherwise build_embedding_service
-    can't resolve the provider and silently falls back to the default LLM,
-    so the user's "I want local embedding" preference is ignored.
+def test_build_llm_registry_does_not_auto_register_ollama_for_embedding(
+    tmp_path,
+) -> None:
+    """Pre-v0.3.32, the chat registry auto-registered Ollama as
+    embedding-only whenever ``[llm.embedding] provider = "ollama"``. That
+    hack existed because embedding pulled its provider via
+    ``registry.get(name)``.
 
-    Real-world manifestation: setup-embedding wizard wrote only
-    [llm.embedding] but left [llm.ollama] empty; the backend kept calling
-    Gemini's embedding API for every reshuffle even though config said
-    ollama.
+    v0.3.32+ ``build_embedding_service`` constructs its own dedicated
+    Ollama provider directly from ``[llm.embedding]`` (with a back-compat
+    read of ``[llm.ollama]``), so the chat registry no longer needs to
+    carry an embedding-only entry. This test pins both halves of the new
+    contract:
+
+      1. The chat registry stays clean — ``ollama`` is NOT registered
+         when only the embedding section asks for it.
+      2. The embedding service still resolves Ollama and uses the right
+         model — the user's "I want local embedding" preference must
+         survive the refactor.
     """
     from openbiliclaw.config import EmbeddingConfig
 
@@ -184,12 +278,20 @@ def test_build_llm_registry_auto_registers_ollama_when_embedding_wants_it() -> N
             gemini=LLMProviderConfig(api_key="test-key", model="gemini-2.0-flash"),
             ollama=LLMProviderConfig(model="", base_url=""),
             embedding=EmbeddingConfig(provider="ollama", model="bge-m3"),
-        )
+        ),
+        data_dir=str(tmp_path),
     )
     registry = build_llm_registry(config)
-    assert "ollama" in registry.available_providers
-    # Default provider is still gemini (we don't pollute chat selection)
+
+    # (1) chat registry no longer carries an embedding-only Ollama entry.
+    assert "ollama" not in registry.available_providers
     assert registry.default_provider == "gemini"
+
+    # (2) embedding still works — it builds its own Ollama provider.
+    service = build_embedding_service(config, registry)
+    assert service is not None
+    assert service._provider.name == "ollama"
+    assert service._model == "bge-m3"
 
 
 def test_build_embedding_service_picks_bge_m3_default_for_ollama(
@@ -351,6 +453,144 @@ def test_openai_primary_with_default_embedding_model_uses_correct_default(
     assert service._model == "text-embedding-3-small", (
         f"expected text-embedding-3-small for OpenAI primary, got {service._model!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# v0.3.32 — embedding gets its own api_key/base_url; chat-side credentials
+# are only used as a back-compat fallback. The four tests below pin the
+# new contract: independent credentials, cross-provider isolation,
+# back-compat fallback, and the WARNING that announces it.
+
+
+def test_embedding_uses_dedicated_credentials_over_chat_block(
+    tmp_path,
+) -> None:
+    """When [llm.embedding] supplies its own api_key/base_url, those win
+    over [llm.<provider>]. The chat block's api_key must NOT leak into
+    the embedding provider — they are different connections."""
+    from openbiliclaw.config import EmbeddingConfig
+
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai",
+            openai=LLMProviderConfig(
+                api_key="chat-side-openai-key",
+                base_url="https://chat.example.com/v1",
+            ),
+            embedding=EmbeddingConfig(
+                provider="openai",
+                model="text-embedding-3-small",
+                api_key="dedicated-embedding-key",
+                base_url="https://embed.example.com/v1",
+            ),
+        ),
+        data_dir=str(tmp_path),
+    )
+    registry = build_llm_registry(config)
+    service = build_embedding_service(config, registry)
+
+    assert service is not None
+    assert service._provider.name == "openai"
+    # Provider was constructed with the embedding-section credentials,
+    # not borrowed from [llm.openai]. We inspect the underlying OpenAI
+    # SDK client because OpenAIProvider doesn't re-expose api_key.
+    assert service._provider._client.api_key == "dedicated-embedding-key"
+    # AsyncOpenAI normalises base_url with a trailing slash.
+    assert str(service._provider._client.base_url).rstrip("/") == (
+        "https://embed.example.com/v1"
+    )
+
+
+def test_embedding_provider_independent_from_chat_provider(
+    tmp_path,
+) -> None:
+    """Cross-provider scenario: chat uses DeepSeek, embedding uses a
+    fully self-contained Gemini config. Neither block borrows from the
+    other — DeepSeek doesn't carry an embedding-capable backend, and
+    Gemini chat is not configured at all. Embedding must still build
+    against the dedicated [llm.embedding] credentials."""
+    if not gemini_sdk_available():
+        pytest.skip("gemini SDK not installed in this environment")
+    from openbiliclaw.config import EmbeddingConfig
+
+    config = Config(
+        llm=LLMConfig(
+            default_provider="deepseek",
+            deepseek=LLMProviderConfig(api_key="deepseek-key"),
+            # NOTE: [llm.gemini] left totally empty — embedding still works.
+            gemini=LLMProviderConfig(api_key=""),
+            embedding=EmbeddingConfig(
+                provider="gemini",
+                model="gemini-embedding-001",
+                api_key="dedicated-gemini-embedding-key",
+            ),
+        ),
+        data_dir=str(tmp_path),
+    )
+    registry = build_llm_registry(config)
+    # Chat registry: only deepseek (gemini has no api_key, so it is NOT
+    # auto-registered for embedding's sake under the new design).
+    assert "gemini" not in registry.available_providers
+
+    service = build_embedding_service(config, registry)
+    assert service is not None
+    assert service._provider.name == "gemini"
+    assert service._model == "gemini-embedding-001"
+
+
+def test_embedding_back_compat_falls_back_to_chat_block(tmp_path) -> None:
+    """Old configs (pre-v0.3.32) only had [llm.embedding] provider/model
+    and relied on [llm.<provider>] for credentials. That path must still
+    work — the embedding service is built and it uses the chat-side
+    api_key transparently.
+
+    Fixture: user explicitly chose openai for embedding but did NOT fill
+    [llm.embedding].api_key. Backend must borrow from [llm.openai]."""
+    from openbiliclaw.config import EmbeddingConfig
+
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai",
+            openai=LLMProviderConfig(
+                api_key="legacy-chat-side-key",
+                base_url="https://api.openai.com/v1",
+            ),
+            embedding=EmbeddingConfig(provider="openai", model=""),
+        ),
+        data_dir=str(tmp_path),
+    )
+
+    service = build_embedding_service(config, build_llm_registry(config))
+
+    assert service is not None
+    assert service._provider.name == "openai"
+    # The dedicated provider was built with chat-side credentials —
+    # proves the back-compat code path was taken.
+    assert service._provider._client.api_key == "legacy-chat-side-key"
+    assert service._model == "text-embedding-3-small"
+
+
+def test_emit_embedding_compat_warning_fires_once_per_provider(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The migration WARNING must fire exactly once per provider per
+    process — runtime_context rebuilds embedding on every PUT
+    /api/config, and we don't want to spam the log on each save."""
+    import logging
+
+    from openbiliclaw.llm import registry as registry_mod
+
+    registry_mod._embedding_compat_warned.clear()
+
+    with caplog.at_level(logging.WARNING, logger="openbiliclaw.llm.registry"):
+        registry_mod._emit_embedding_compat_warning("openai")
+        registry_mod._emit_embedding_compat_warning("openai")
+        registry_mod._emit_embedding_compat_warning("openai")
+
+    compat = [r for r in caplog.records if "back-compat" in r.getMessage().lower()]
+    assert len(compat) == 1
+    assert "[llm.openai]" in compat[0].getMessage()
+    assert "openai" in registry_mod._embedding_compat_warned
 
 
 def test_openai_provider_supports_embedding_flag_is_set() -> None:

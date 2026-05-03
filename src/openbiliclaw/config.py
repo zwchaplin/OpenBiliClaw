@@ -25,6 +25,11 @@ _REMOTE_PROVIDER_FIELDS = {
     "gemini": "llm.gemini.api_key",
     "deepseek": "llm.deepseek.api_key",
     "openrouter": "llm.openrouter.api_key",
+    # v0.3.32+ — generic OpenAI-protocol-compatible provider (Groq /
+    # Together / Azure OpenAI / vLLM / self-hosted, etc.). Distinct from
+    # ``openai`` so users can run both in parallel (chat = openai for
+    # gpt-5-nano, openai_compatible = Groq for fast Llama drafting).
+    "openai_compatible": "llm.openai_compatible.api_key",
 }
 
 
@@ -72,10 +77,19 @@ class LLMProviderConfig:
 
 @dataclass
 class EmbeddingConfig:
-    """Embedding model configuration."""
+    """Embedding model configuration.
+
+    v0.3.32+ owns its own ``api_key`` / ``base_url`` so the embedding
+    provider is fully independent from ``[llm].default_provider`` and the
+    chat-side ``[llm.<name>]`` blocks. Old configs that left these blank
+    fall back to ``[llm.<provider>]`` credentials with a one-time WARNING
+    (see ``registry.build_embedding_service``).
+    """
 
     provider: str = ""  # Empty = use LLM default_provider
     model: str = "gemini-embedding-001"
+    api_key: str = ""
+    base_url: str = ""
     similarity_threshold: float = 0.82
 
 
@@ -98,6 +112,9 @@ class LLMConfig:
     deepseek: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     ollama: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     openrouter: LLMProviderConfig = field(default_factory=LLMProviderConfig)
+    # v0.3.32+ generic OpenAI-protocol-compatible provider. Always
+    # requires an explicit base_url (otherwise it would just be ``openai``).
+    openai_compatible: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     # Per-module overrides (empty = use global default)
     soul: ModuleLLMConfig = field(default_factory=ModuleLLMConfig)
@@ -358,11 +375,12 @@ def _build_config(raw: dict[str, Any]) -> Config:
         deepseek=LLMProviderConfig(**llm_raw.get("deepseek", {})),
         ollama=LLMProviderConfig(**llm_raw.get("ollama", {})),
         openrouter=LLMProviderConfig(**llm_raw.get("openrouter", {})),
+        openai_compatible=LLMProviderConfig(**llm_raw.get("openai_compatible", {})),
         embedding=EmbeddingConfig(
             **{
                 k: v
                 for k, v in embedding_raw.items()
-                if k in ("provider", "model", "similarity_threshold")
+                if k in ("provider", "model", "api_key", "base_url", "similarity_threshold")
             }
         ),
         soul=ModuleLLMConfig(
@@ -436,6 +454,7 @@ def _collect_config_issues(config: Config) -> list[ConfigIssue]:
         "deepseek": config.llm.deepseek,
         "ollama": config.llm.ollama,
         "openrouter": config.llm.openrouter,
+        "openai_compatible": config.llm.openai_compatible,
     }
 
     provider_config = provider_configs.get(provider_name)
@@ -456,6 +475,24 @@ def _collect_config_issues(config: Config) -> list[ConfigIssue]:
                 field=required_field,
                 message=(
                     f"默认 provider `{provider_name}` 缺少 `api_key`，请在 config.toml 中填写。"
+                ),
+            )
+        )
+
+    # openai_compatible without an explicit base_url is meaningless — it
+    # would just be ``openai`` with extra steps. Surface this so the user
+    # knows to fill ``[llm.openai_compatible].base_url`` (Groq:
+    # https://api.groq.com/openai/v1, vLLM: http://your-vllm:8000/v1, ...).
+    if (
+        provider_name == "openai_compatible"
+        and not config.llm.openai_compatible.base_url.strip()
+    ):
+        issues.append(
+            ConfigIssue(
+                field="llm.openai_compatible.base_url",
+                message=(
+                    "默认 provider `openai_compatible` 必须填 `base_url` "
+                    "(例如 Groq: https://api.groq.com/openai/v1)。"
                 ),
             )
         )
@@ -554,10 +591,15 @@ def _render_config_toml(config: Config) -> str:
     lines.extend(_render_provider_section("ollama", config.llm.ollama))
     lines.extend(_render_provider_section("openrouter", config.llm.openrouter))
     lines.extend(
+        _render_provider_section("openai_compatible", config.llm.openai_compatible)
+    )
+    lines.extend(
         [
             "[llm.embedding]",
             f"provider = {_toml_string(config.llm.embedding.provider)}",
             f"model = {_toml_string(config.llm.embedding.model)}",
+            f"api_key = {_toml_string(config.llm.embedding.api_key)}",
+            f"base_url = {_toml_string(config.llm.embedding.base_url)}",
             f"similarity_threshold = {config.llm.embedding.similarity_threshold}",
             "",
             "# Per-module LLM overrides (empty = use global default)",
@@ -625,7 +667,7 @@ def _render_provider_section(name: str, provider: LLMProviderConfig) -> list[str
     lines = [f"[llm.{name}]"]
     lines.append(f"api_key = {_toml_string(provider.api_key)}")
     lines.append(f"model = {_toml_string(provider.model)}")
-    if name in {"openai", "deepseek", "ollama", "openrouter"}:
+    if name in {"openai", "deepseek", "ollama", "openrouter", "openai_compatible"}:
         lines.append(f"base_url = {_toml_string(provider.base_url)}")
     if name == "deepseek" and provider.reasoning_effort:
         lines.append(f"reasoning_effort = {_toml_string(provider.reasoning_effort)}")

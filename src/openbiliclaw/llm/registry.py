@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .base import LLMProvider, LLMProviderError, LLMRegistry
 from .claude_provider import ClaudeProvider
@@ -51,6 +51,7 @@ def build_llm_registry(
         ("deepseek", _maybe_deepseek_provider(config, overrides)),
         ("ollama", _maybe_ollama_provider(config, overrides)),
         ("openrouter", _maybe_openrouter_provider(config, overrides)),
+        ("openai_compatible", _maybe_openai_compatible_provider(config, overrides)),
     ]
 
     for _name, provider in provider_specs:
@@ -87,18 +88,56 @@ def build_llm_registry(
     return registry
 
 
+_EMBEDDING_CAPABLE_PROVIDERS: tuple[str, ...] = (
+    "openai",
+    "gemini",
+    "ollama",
+    # Most OpenAI-protocol-compatible backends (Together, vLLM, Azure
+    # OpenAI, ...) expose /v1/embeddings. Groq currently does not, but
+    # users running a Groq + openai_compatible setup already have to
+    # supply an explicit embedding provider in [llm.embedding] — this
+    # candidate only kicks in when they actively requested it.
+    "openai_compatible",
+)
+_DEFAULT_EMBEDDING_MODEL_BY_PROVIDER: dict[str, str] = {
+    "gemini": "gemini-embedding-001",
+    "openai": "text-embedding-3-small",
+    "ollama": "bge-m3",
+    # No safe default for openai_compatible — depends entirely on the
+    # upstream service. Users must specify an explicit model.
+    "openai_compatible": "text-embedding-3-small",
+}
+# Module-level set so the back-compat WARNING fires once per provider per
+# process (not once per build_embedding_service call — runtime_context
+# rebuilds embedding on every PUT /api/config and we don't want to spam).
+_embedding_compat_warned: set[str] = set()
+
+
 def build_embedding_service(
     config: Config,
-    registry: LLMRegistry,
+    registry: LLMRegistry,  # noqa: ARG001 — kept for back-compat callers
 ) -> SupportsEmbeddingService | None:
-    """Build an EmbeddingService from config, or None if unavailable.
+    """Build an EmbeddingService from ``[llm.embedding]``.
 
-    Uses ``[llm.embedding]`` config section for model and threshold.
-    When the requested provider doesn't expose an embeddings endpoint
-    (Claude, DeepSeek, OpenRouter), falls back to the next available
-    embedding-capable provider in the registry — preferring local
-    Ollama > Gemini > OpenAI — so the recommendation pipeline doesn't
-    silently lose embeddings.
+    v0.3.32+ embedding owns its own ``api_key`` / ``base_url`` (see
+    ``EmbeddingConfig``), so the embedding provider is constructed as a
+    dedicated instance — completely decoupled from the chat-side
+    LLMRegistry. The ``registry`` parameter is preserved only so existing
+    call sites don't need to change; it is no longer consulted.
+
+    Resolution rules per candidate provider:
+      1. If ``[llm.embedding].api_key`` (or ``base_url``) is set AND the
+         candidate equals the requested provider, those credentials are
+         used directly.
+      2. Otherwise we fall back to the chat-side ``[llm.<provider>]``
+         block. When this back-compat path fires for a provider the user
+         explicitly chose for embedding, a one-time WARNING is emitted —
+         the path will be removed in a future release.
+
+    When the requested provider has no embeddings endpoint (Claude,
+    DeepSeek, OpenRouter) or its credentials are missing, we walk a
+    fallback chain ``ollama → gemini → openai`` and use the first one
+    that can be constructed.
     """
     try:
         from typing import cast
@@ -106,36 +145,30 @@ def build_embedding_service(
         from openbiliclaw.llm.embedding import EmbeddingCache, EmbeddingService, SupportsEmbed
 
         emb_cfg = config.llm.embedding
-        requested_name = emb_cfg.provider.strip() or config.llm.default_provider
+        requested_name = (
+            emb_cfg.provider.strip().lower()
+            or config.llm.default_provider.strip().lower()
+        )
 
-        # Pick a sensible default model per provider when config didn't pin one
-        default_model_by_provider = {
-            "gemini": "gemini-embedding-001",
-            "openai": "text-embedding-3-small",
-            "ollama": "bge-m3",
-        }
-
-        # Build fallback chain: requested provider first, then prefer
-        # local-first (ollama) → gemini → openai. We exclude providers
-        # that explicitly opt out via ``supports_embedding=False``
-        # (Claude, DeepSeek, OpenRouter) so we never hand an embedding
-        # call to a backend that will 404.
-        fallback_order = [requested_name]
-        for name in ("ollama", "gemini", "openai"):
-            if name not in fallback_order:
+        # Build candidate ordering: requested first, then local-first
+        # ollama → gemini → openai. Skip providers known to lack an
+        # embeddings endpoint — they would 404 at runtime.
+        fallback_order: list[str] = []
+        for name in (requested_name, "ollama", "gemini", "openai"):
+            if name in _EMBEDDING_CAPABLE_PROVIDERS and name not in fallback_order:
                 fallback_order.append(name)
 
-        chosen_provider = None
+        chosen_provider: LLMProvider | None = None
         chosen_name = ""
-        for name in fallback_order:
-            try:
-                candidate = registry.get(name)
-            except Exception:
+        chosen_model = ""
+        for candidate in fallback_order:
+            built = _build_dedicated_embedding_provider(
+                candidate, emb_cfg, config, requested_name
+            )
+            if built is None:
                 continue
-            if not getattr(candidate, "supports_embedding", False):
-                continue
-            chosen_provider = candidate
-            chosen_name = name
+            chosen_provider, chosen_model = built
+            chosen_name = candidate
             break
 
         if chosen_provider is None:
@@ -150,10 +183,9 @@ def build_embedding_service(
 
         if chosen_name != requested_name:
             logger.warning(
-                "Embedding provider %r has no embeddings endpoint; "
-                "falling back to %r. To silence this, set "
-                "[llm.embedding] provider=%r explicitly in config.toml, "
-                "or run 'openbiliclaw setup-embedding'.",
+                "Embedding provider %r unavailable; falling back to %r. "
+                "Set [llm.embedding] provider=%r explicitly in config.toml "
+                "to silence this, or run 'openbiliclaw setup-embedding'.",
                 requested_name,
                 chosen_name,
                 chosen_name,
@@ -168,24 +200,147 @@ def build_embedding_service(
         except Exception:
             logger.debug("Failed to init embedding L2 cache", exc_info=True)
 
-        # If the user pinned an embedding model in [llm.embedding], honour
-        # it — but only when it makes sense for the *chosen* provider. If
-        # we fell back from openai to ollama, ``text-embedding-3-small``
-        # is meaningless on Ollama; switch to that provider's default.
-        effective_model = emb_cfg.model
-        if chosen_name != requested_name or not effective_model:
-            effective_model = default_model_by_provider.get(chosen_name) or "gemini-embedding-001"
-
-        # The supports_embedding gate above guarantees ``embed()`` exists
-        # at runtime; cast for the SupportsEmbed Protocol.
         return EmbeddingService(
             cast("SupportsEmbed", chosen_provider),
-            model=effective_model,
+            model=chosen_model,
             similarity_threshold=emb_cfg.similarity_threshold,
             persistent_cache=l2_cache,
         )
     except Exception:
         return None
+
+
+def _build_dedicated_embedding_provider(
+    candidate: str,
+    emb_cfg: Any,
+    config: Config,
+    requested_name: str,
+) -> tuple[LLMProvider, str] | None:
+    """Construct a dedicated provider instance for embedding calls.
+
+    Returns ``(provider, effective_model)`` or ``None`` if the candidate
+    can't be constructed (missing api_key, missing SDK, ...).
+    """
+    emb_api_key = emb_cfg.api_key.strip()
+    emb_base_url = emb_cfg.base_url.strip()
+
+    # First-class path: candidate matches what the user requested AND
+    # they supplied credentials in [llm.embedding].
+    use_embedding_creds = candidate == requested_name and bool(emb_api_key or emb_base_url)
+
+    if use_embedding_creds:
+        api_key = emb_api_key
+        base_url = emb_base_url
+    else:
+        # Back-compat: borrow from [llm.<candidate>]. Triggers a one-time
+        # WARNING only when the user explicitly chose this provider for
+        # embedding (otherwise it's just normal fallback resolution).
+        chat_cfg = getattr(config.llm, candidate, None)
+        api_key = (getattr(chat_cfg, "api_key", "") if chat_cfg is not None else "").strip()
+        base_url = (getattr(chat_cfg, "base_url", "") if chat_cfg is not None else "").strip()
+        if (
+            emb_cfg.provider.strip().lower() == candidate
+            and candidate == requested_name
+        ):
+            _emit_embedding_compat_warning(candidate)
+
+    # Effective model: honour explicit emb_cfg.model only when we're
+    # building the requested provider — fallback paths must use the
+    # per-provider default (e.g. text-embedding-3-small on OpenAI is
+    # meaningless when we fell back to Ollama).
+    if candidate == requested_name and emb_cfg.model.strip():
+        effective_model = emb_cfg.model.strip()
+    else:
+        effective_model = _DEFAULT_EMBEDDING_MODEL_BY_PROVIDER.get(
+            candidate, "gemini-embedding-001"
+        )
+
+    if candidate == "ollama":
+        # Ollama doesn't require an api_key, so without a gate the
+        # constructor would always succeed and silently mask "user has no
+        # embedding-capable provider" — which matters for the warning
+        # path that tells users to set up Ollama or a Gemini key. Only
+        # build it when the user actually opted in:
+        #   - [llm.embedding] supplied its own ollama config, OR
+        #   - the user requested Ollama for embedding, OR
+        #   - [llm.ollama] is configured (back-compat — they run it locally).
+        chat_ollama = config.llm.ollama
+        has_chat_ollama_config = bool(
+            chat_ollama.model.strip() or chat_ollama.base_url.strip()
+        )
+        if (
+            not use_embedding_creds
+            and requested_name != "ollama"
+            and not has_chat_ollama_config
+        ):
+            return None
+        if not base_url:
+            base_url = "http://localhost:11434/v1"
+        if not base_url.rstrip("/").endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        return (
+            OllamaProvider(
+                api_key=api_key or "ollama",
+                model=effective_model,
+                base_url=base_url,
+            ),
+            effective_model,
+        )
+
+    if candidate == "openai":
+        if not api_key:
+            return None
+        return (
+            OpenAIProvider(
+                api_key=api_key,
+                model=effective_model,
+                base_url=base_url,
+            ),
+            effective_model,
+        )
+
+    if candidate == "gemini":
+        if not api_key:
+            api_key = _gemini_env_api_key()
+        if not api_key or not gemini_sdk_available():
+            return None
+        return (
+            GeminiProvider(api_key=api_key, model=effective_model),
+            effective_model,
+        )
+
+    if candidate == "openai_compatible":
+        # Strict — no api_key OR no base_url means we can't construct it.
+        # Unlike "openai", there's no api.openai.com fallback because
+        # this provider's whole reason to exist is the custom base_url.
+        if not api_key or not base_url:
+            return None
+        return (
+            OpenAIProvider(
+                api_key=api_key,
+                model=effective_model,
+                base_url=base_url,
+                provider_name="openai_compatible",
+            ),
+            effective_model,
+        )
+
+    return None
+
+
+def _emit_embedding_compat_warning(provider_name: str) -> None:
+    """Emit at most one WARNING per provider per process for the
+    embedding back-compat path."""
+    if provider_name in _embedding_compat_warned:
+        return
+    _embedding_compat_warned.add(provider_name)
+    logger.warning(
+        "[llm.embedding] api_key/base_url is empty — falling back to "
+        "[llm.%s] credentials. This back-compat path will be removed in a "
+        "future release. Move the embedding credentials into "
+        "[llm.embedding] in your config.toml.",
+        provider_name,
+    )
 
 
 def summarize_registry(config: Config, registry: LLMRegistry) -> RegistrySummary:
@@ -261,15 +416,13 @@ def _maybe_ollama_provider(config: Config, overrides: dict[str, LLMProvider]) ->
     raw_base_url = config.llm.ollama.base_url.strip()
     model = config.llm.ollama.model.strip()
 
-    # Embedding-driven registration: when [llm.embedding] provider="ollama",
-    # the user wants Ollama for embedding even if they never configured it
-    # for chat completions. Auto-register so build_embedding_service can
-    # actually reach it. The setup-embedding wizard only writes the
-    # [llm.embedding] section, so this path is the live experience for
-    # anyone who opted into local embedding fallback.
-    embedding_wants_ollama = config.llm.embedding.provider.strip().lower() == "ollama"
-
-    if not model and not raw_base_url and not embedding_wants_ollama:
+    # v0.3.32+ note: build_embedding_service now constructs its own Ollama
+    # provider directly from [llm.embedding] (or back-compat from
+    # [llm.ollama]) — it no longer goes through this registry. So we no
+    # longer need the old ``embedding_wants_ollama`` auto-register hack:
+    # the chat registry stays clean, and Ollama is only registered here
+    # when the user actually wants chat completions through it.
+    if not model and not raw_base_url:
         return None
     base_url = raw_base_url or "http://localhost:11434/v1"
     # Normalise: Ollama's OpenAI-compat shim lives at `/v1/...`. Older
@@ -327,4 +480,32 @@ def _maybe_openrouter_provider(
         base_url=config.llm.openrouter.base_url or "https://openrouter.ai/api/v1",
         http_referer=config.llm.openrouter.http_referer,
         x_title=config.llm.openrouter.x_title,
+    )
+
+
+def _maybe_openai_compatible_provider(
+    config: Config, overrides: dict[str, LLMProvider]
+) -> LLMProvider | None:
+    """Generic OpenAI-protocol-compatible provider (Groq / Together / Azure
+    OpenAI / vLLM / self-hosted, etc.).
+
+    Distinct from ``[llm.openai]`` so users can run both in parallel and
+    keep cost / model accounting separate. Refuses to register without a
+    ``base_url`` — that's the whole point of this provider; without it
+    the call would just hit api.openai.com and would be indistinguishable
+    from ``[llm.openai]`` (and would 401 against the wrong key)."""
+    if "openai_compatible" in overrides:
+        return overrides["openai_compatible"]
+    cfg = config.llm.openai_compatible
+    if not cfg.api_key.strip():
+        return None
+    if not cfg.base_url.strip():
+        # Surfaced as a ConfigIssue in _collect_config_issues; here we
+        # just refuse to construct a misconfigured provider.
+        return None
+    return OpenAIProvider(
+        api_key=cfg.api_key,
+        model=cfg.model or "gpt-4o-mini",
+        base_url=cfg.base_url,
+        provider_name="openai_compatible",
     )

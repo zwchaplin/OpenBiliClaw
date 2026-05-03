@@ -3175,6 +3175,16 @@
       gap: 8px;
     }
 
+    .settings-hint {
+      margin: 0 0 4px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(125, 211, 252, 0.12);
+      color: var(--text-secondary);
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+
     .settings-field-row label {
       text-transform: none;
       font-size: 13px;
@@ -3524,6 +3534,7 @@
             <option value="deepseek">DeepSeek</option>
             <option value="ollama">Ollama (本地)</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="openai_compatible">OpenAI 协议兼容 (Groq/Together/Azure/vLLM)</option>
           </select>
         </div>
         <!-- OpenAI -->
@@ -3604,24 +3615,53 @@
             <input id="cfgOpenrouterBaseUrl" type="text" placeholder="https://openrouter.ai/api/v1">
           </div>
         </div>
+        <!-- OpenAI Compatible -->
+        <div class="settings-provider-fields" data-provider="openai_compatible">
+          <p class="settings-hint">
+            适配 Groq / Together / Azure OpenAI / vLLM / 自建等任何走 OpenAI 协议的服务。<strong>Base URL 必填</strong>，否则等同于普通 OpenAI provider。
+          </p>
+          <div class="settings-field">
+            <label for="cfgOpenaiCompatibleKey">API Key</label>
+            <input id="cfgOpenaiCompatibleKey" type="password" autocomplete="off" placeholder="gsk-... / sk-...">
+          </div>
+          <div class="settings-field">
+            <label for="cfgOpenaiCompatibleModel">Model</label>
+            <input id="cfgOpenaiCompatibleModel" type="text" placeholder="llama-3.1-70b-versatile">
+          </div>
+          <div class="settings-field">
+            <label for="cfgOpenaiCompatibleBaseUrl">Base URL (必填)</label>
+            <input id="cfgOpenaiCompatibleBaseUrl" type="text" placeholder="https://api.groq.com/openai/v1">
+          </div>
+        </div>
       </div>
 
       <!-- Embedding -->
       <div class="settings-section">
         <h3><span class="section-icon">&#x1F50D;</span> Embedding 模型</h3>
+        <p class="settings-hint">
+          Embedding 与 LLM 各自独立配置，互不共用 API Key。Claude / DeepSeek / OpenRouter 没有 embedding 接口，未在此列出。
+        </p>
         <div class="settings-field">
-          <label for="cfgEmbeddingProvider">Provider (留空则跟随默认 LLM Provider)</label>
+          <label for="cfgEmbeddingProvider">Provider</label>
           <select id="cfgEmbeddingProvider">
-            <option value="">(跟随默认)</option>
+            <option value="">(跟随默认 LLM Provider)</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
-            <option value="ollama">Ollama</option>
-            <option value="openrouter">OpenRouter</option>
+            <option value="ollama">Ollama (本地)</option>
+            <option value="openai_compatible">OpenAI 协议兼容 (Together/vLLM/Azure 等)</option>
           </select>
+        </div>
+        <div class="settings-field" data-embedding-field="api_key">
+          <label for="cfgEmbeddingApiKey">Embedding API Key</label>
+          <input id="cfgEmbeddingApiKey" type="password" autocomplete="off" placeholder="sk-...">
+        </div>
+        <div class="settings-field" data-embedding-field="base_url">
+          <label for="cfgEmbeddingBaseUrl">Base URL (可选)</label>
+          <input id="cfgEmbeddingBaseUrl" type="text" placeholder="留空使用默认">
         </div>
         <div class="settings-field">
           <label for="cfgEmbeddingModel">Embedding Model</label>
-          <input id="cfgEmbeddingModel" type="text" placeholder="gemini-embedding-001">
+          <input id="cfgEmbeddingModel" type="text" placeholder="留空 = 自动选择">
         </div>
         <div class="settings-field">
           <label for="cfgEmbeddingSimilarity">相似度阈值 (0~1)</label>

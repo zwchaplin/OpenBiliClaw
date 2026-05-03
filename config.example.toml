@@ -81,12 +81,40 @@ base_url = "https://openrouter.ai/api/v1"
 http_referer = ""
 x_title = "OpenBiliClaw"
 
+[llm.openai_compatible]
+# v0.3.32+ — generic OpenAI-protocol-compatible provider. Use this for
+# Groq / Together / Azure OpenAI / vLLM / self-hosted, etc. Distinct from
+# [llm.openai] so cost stats / retries / billing stay separate.
+#
+# Examples:
+#   - Groq:     base_url = "https://api.groq.com/openai/v1"
+#               model = "llama-3.1-70b-versatile"
+#   - Together: base_url = "https://api.together.xyz/v1"
+#               model = "Qwen/Qwen2.5-72B-Instruct-Turbo"
+#   - Azure:    base_url = "https://<resource>.openai.azure.com/openai/deployments/<deployment>"
+#               model = "(matches Azure deployment name)"
+#   - vLLM:     base_url = "http://localhost:8000/v1"
+#               model = "(model loaded by vLLM)"
+#
+# base_url is REQUIRED — without it, this provider degrades to ``openai``
+# (and would 401 against api.openai.com). The backend refuses to register
+# without one and surfaces a ConfigIssue at startup.
+api_key = ""
+model = ""
+base_url = ""
+
 [llm.embedding]
 # Embedding model for semantic similarity (topic dedup, fatigue, feedback)
 #
-# provider: empty = use [llm].default_provider
-#           "ollama" = local fallback via Ollama (recommended for offline /
-#                      cross-platform setups; no API key needed)
+# v0.3.32+ note: this section now owns its own ``api_key`` / ``base_url``.
+# Embedding is fully decoupled from ``[llm].default_provider`` — pick the
+# embedding provider, supply its credentials here, and chat traffic keeps
+# using whatever ``[llm].default_provider`` points to.
+#
+# provider: empty = use [llm].default_provider (back-compat path —
+#                   borrows credentials from [llm.<provider>])
+#           "ollama" = local Ollama (no API key needed)
+#           "openai" / "gemini" = remote embeddings
 # model:    matched to provider when empty:
 #             gemini → gemini-embedding-001
 #             openai → text-embedding-3-small
@@ -105,6 +133,13 @@ provider = ""
 #   openai → text-embedding-3-small
 #   ollama → bge-m3
 model = ""
+# v0.3.32+: dedicated embedding credentials. Leave empty to fall back to
+# [llm.<provider>].api_key / .base_url (back-compat — emits a one-time
+# WARNING; will be removed in a future release). Ollama doesn't need an
+# api_key. base_url is optional for Ollama (defaults to localhost) and
+# OpenAI (defaults to api.openai.com); Gemini SDK ignores it.
+api_key = ""
+base_url = ""
 # Cosine similarity threshold: topics above this are considered "same topic"
 similarity_threshold = 0.82
 
