@@ -81,123 +81,32 @@ OpenBiliClaw doesn't farm credentials — it reuses **your** current browser ses
 
 > 💡 **Strongly recommended for Xiaohongshu: use a CDP-mode Chrome to reuse the login session** (avoids anti-scraping). Launch a separate-profile Chrome with `--remote-debugging-port=9222`, manually log in once, then set `[sources.browser] cdp_url = "http://localhost:9222"` in `config.toml`. See [config reference](docs/modules/config.md#sourcesbrowser).
 
-### ⚡ Step 2: Deploy the Backend
+### ⚙️ Step 2: Run the Backend Locally
 
-**Recommended: paste to an AI coding agent for one-click deploy** (works with Claude Code / Codex CLI / Cursor etc.):
-
-> 📌 **Prerequisite — you need an AI coding agent first.** If you don't have one, pick any:
-> - [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) — Anthropic's official CLI
-> - [Codex CLI](https://github.com/openai/codex) — OpenAI's official CLI
-> - [Cursor](https://cursor.com) / [Windsurf](https://codeium.com/windsurf) — AI-native IDEs
->
-> If installing one of these is more friction than it's worth, jump to "Or: run the one-liner install script" below — it does the same thing without an AI in the loop.
-
-```text
-Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/agent-install.md to deploy the OpenBiliClaw backend for me (use Bash `curl` to fetch the document, NOT WebFetch — WebFetch summarises markdown and drops critical commands).
-```
-
-The AI clones the repo locally, installs dependencies, starts the backend, runs a health check, then **asks you four questions, each with a sensible default**: which LLM to use, which embedding service to use, how to provide the B站 cookie, and whether Xiaohongshu likes/favorites may be used in the initial profile. Embedding defaults to local Ollama bge-m3 (free + offline + no quota cost), while Xiaohongshu data is opt-in only. Finally it auto-runs `init` (fetch history → build soul profile → first discovery pass). Fully transparent. **This is the recommended path for most users — zero friction.**
-
-**Or: have the AI agent deploy with Docker** (good if you have Docker Desktop; v0.3.11+ ships an Ollama embedding sidecar by default):
-
-```text
-Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md to deploy the OpenBiliClaw backend via Docker Compose (use Bash `curl` to fetch the document, NOT WebFetch).
-```
-
-**Or: run the one-liner installer yourself** (the same script the AI uses, no agent required):
-
-macOS / Linux / WSL2 (Bash):
+> Pre-built backend binaries / one-liner install scripts are no longer published. **Run from source instead** — better dev ergonomics and clearer failure modes.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/scripts/install.sh | bash
-```
-
-Native Windows (PowerShell — no Docker, no WSL2 required):
-
-```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; iwr https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/scripts/install.ps1 -UseBasicParsing | iex
-```
-
-> The leading `[Net.ServicePointManager]...Tls12` lets PowerShell 5.1 (the default on Windows 10/11) successfully negotiate with GitHub. GitHub no longer accepts TLS 1.0/1.1 and PS 5.1 picks those by default. Users on PowerShell 7 can drop the prefix.
-
-Prerequisites: `git` and `python3` (3.11+; on Windows the `py` launcher works). The scripts auto-clone the repo, install dependencies, start the backend, run a health check, and print the exact follow-up questions for LLM, embedding, Bilibili cookie, and Xiaohongshu opt-in. First-time init runs automatically only after those choices and credentials are explicit.
-
-<details>
-<summary><b>Don't want to run scripts? You can also download a pre-built backend desktop package</b></summary>
-
-For users who prefer not to touch the command line. **Caveat:** the first desktop packages are unsigned, so they will trigger OS security prompts — that's why this option is listed last:
-
-1. Open [OpenBiliClaw Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
-2. Download the backend package for your OS:
-   - macOS: `OpenBiliClaw-macos-*.zip`
-   - Windows: `OpenBiliClaw-windows-*.zip`
-3. Unzip and launch; macOS will show a Gatekeeper prompt (right-click → Open), Windows will show SmartScreen ("More info" → Run anyway)
-4. Connect the extension to local `http://127.0.0.1:8420`
-
-If those prompts feel like a hassle, the one-liner installer above is faster overall.
-</details>
-
-> 💡 **On Windows?** Since v0.3.4 the PowerShell installer fully supports native Windows — no Docker / WSL2 needed. You can still use the Docker path above if you already have Docker Desktop installed.
-
-> 🧠 **Optional: local embedding fallback (no API key required)** — install Ollama once:
-> Mac `brew install ollama && ollama serve &`, Windows from [ollama.com/download](https://ollama.com/download), Linux `curl -fsSL https://ollama.com/install.sh \| sh && ollama serve &`.
-> Then run `uv run openbiliclaw setup-embedding` — the wizard pulls `bge-m3` (~568MB, CPU only) and writes the config. Useful when your remote embedding quota is exhausted, you're offline, or you just don't want to add another API key.
-
-<details>
-<summary>Manual installation / configuration / browser extension</summary>
-
-> Human reference: [docs/agent-install.md](docs/agent-install.md) (short agent-facing contract) and [docs/agent-deployment.md](docs/agent-deployment.md) (long-form troubleshooting).
-
-#### Manual installation
-
-```bash
-# Clone
 git clone https://github.com/whiteguo233/OpenBiliClaw.git
 cd OpenBiliClaw
 
-# Using uv (recommended)
+# Recommended: uv
 uv sync
 
-# Or using pip
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-#### Manual configuration
-
-```bash
-# Copy config template
+# Copy config template, fill in LLM API key etc.
 cp config.example.toml config.toml
 
-# Edit config (set LLM API keys, etc.)
-vim config.toml
+# One-command init (fetch history · build soul profile · first discovery)
+uv run openbiliclaw init
+
+# Start the backend API (default 127.0.0.1:8420 — the extension connects here)
+uv run openbiliclaw serve-api
 ```
 
-#### Run
+> 🧠 **Optional: local embedding fallback (no extra API key)** — install Ollama once:
+> macOS: `brew install ollama && ollama serve &`; Windows: download from [ollama.com/download](https://ollama.com/download); Linux: `curl -fsSL https://ollama.com/install.sh | sh && ollama serve &`.
+> Then `uv run openbiliclaw setup-embedding` auto-pulls `bge-m3` (~568MB, CPU-only) and writes the config.
 
-```bash
-# One-command init (fetch history · build profile · first discovery)
-openbiliclaw init
-
-# Optional: enable local Ollama as embedding fallback (no extra API key)
-openbiliclaw setup-embedding
-
-# Manual content discovery
-openbiliclaw discover
-
-# Get recommendations
-openbiliclaw recommend
-
-# View user profile
-openbiliclaw profile
-```
-
-#### Docker Deployment
-
-> 📦 Docker deployment is also supported. See the [Docker Deployment Guide](docs/docker-deployment.md) for details.
-
-</details>
+For full dev environment, configuration and CLI reference, see [Contributing Guide](docs/contributing.md) · [CLI Reference](docs/modules/cli.md) · [Config Reference](docs/modules/config.md).
 
 ## 🤖 Integrate with OpenClaw / AI Coding Agents
 
@@ -377,35 +286,13 @@ OpenBiliClaw/
 
 | Version | Date | Key changes |
 |---|---|---|
-| **[v0.3.26](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.26)** | 2026-05-02 | New LLM billing module: every successful call writes one row to the `llm_usage` table; `openbiliclaw cost` CLI prints daily/by-provider spend. `config.example.toml` defaults switched to cost-friendly values (`reasoning_effort=""` thinking off, `discovery_cron 8h`) — fresh installs target ≈¥0.5/day. |
-| [v0.3.25](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.25) | 2026-05-02 | Discovery LLM eval `batch_size` 10→30 (amortizes the 3500-token system prompt across one call instead of three → -54% input cost), `max_tokens` 8192→16384; refresh `_requested_refresh_limit` now scales per-strategy ask to actual pool gap (gap=20 → 15 per strategy instead of 30) → -50-77% eval calls. |
-| [v0.3.24](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.24) | 2026-05-02 | Cross-source event format unification: Bilibili / Xiaohongshu / extension click / feedback all funnel through `event_format.build_event()` and emit a standardized dict carrying a Chinese natural-language `context`. `_summarize_history` exposes a `contexts` list; preference / awareness / soul prompts add rules pointing the LLM at it. Fixes a DB double-encoding bug that triple-escaped context strings in LLM prompts. |
-| [v0.3.23](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.23) | 2026-05-02 | xhs `bootstrap_profile` scrolling tasks now run in foreground tabs (background tabs render only a shallow wrapper on Xiaohongshu so the masonry/waterfall lazy-load never fires); scroll-target detection prefers feed/waterfall/masonry containers and skips zero-height wrappers; profile state parser fills in `displayTitle` / `cover.urlDefault`. |
-| [v0.3.22](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.22) | 2026-05-01 | Fix `openbiliclaw init` so Xiaohongshu data actually reaches the soul profile: enqueue/collect API split (8s blocking wait → 30s parallel-with-Bilibili-fetches), `max_scroll_rounds` default 0→3, five completion states (ok/empty/timeout/failed/skipped) each get a clear Chinese feedback line. |
-| [v0.3.21](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.21) | 2026-05-01 | Aligns the v0.3.20 UX changes onto the Docker / Windows PowerShell / direct-CLI install paths: `docker-deployment.md` main menu now leads with DeepSeek and demotes the gateway to "Advanced"; `install.ps1` mirrors `install.sh`'s cookie-only-green and REUSE_FROM warning; `cli.py` `_LLM_MENU` reordered + embedding wizard rewritten with the v0.3.20 default-recommendation shape. |
-| **[v0.3.20](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.20)** | 2026-05-01 | Install-flow UX fixes + embedding fallback chain: silent-failure bug when Claude / DeepSeek / OpenRouter is the primary LLM and embedding "follows" it — `LLMProvider.supports_embedding` flag drives a fallback chain (ollama → gemini → openai) instead of returning None · `--provider openai` without `--llm-base-url` now clears any stale gateway URL written by a previous run · agent-install.md trims the user's main menu to 3 LLM options (gateway moved to Advanced) · embedding question redesigned with a clear default + tradeoff explanation (recommended: local Ollama bge-m3 — free, offline; alternative: cloud Gemini for higher recall on multilingual / long-form content) · install.sh status block shows green "backend ready — waiting for browser extension" instead of yellow "partial / missing" when only the B站 cookie is pending · README adds an AI-agent prerequisite callout |
-| [v0.3.19](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.19) | 2026-05-01 | `openbiliclaw init` now best-effort mixes Xiaohongshu saved / liked / explicit page-history signals into the first profile. The extension runs `bootstrap_profile` in the user's logged-in Xiaohongshu session; scrolling tasks open `/explore` in the foreground and click the page's own profile entry before using `partial` batches. The backend converts notes to normal `favorite / like / view` events without directly crawling Xiaohongshu. |
-| **[v0.3.18](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.18)** | 2026-04-30 | Promotes `franchise_key` to a first-class column on `content_cache`, populated directly by the LLM at evaluation time. Downstream curator dislike propagation and `/api/recommendations` IP dedup now read from the real column instead of the title heuristic that v0.3.17 briefly tried. The hardcoded alias list is gone. |
-| [v0.3.17](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.17) | 2026-04-30 | Fixes a recommendation pipeline IP over-generalisation bug ("5 Genshin clips in one popup"): adds a heuristic franchise extractor; `/api/recommendations` now caps each franchise at 2 per response window; disliking one Genshin video soft-down-weights all same-franchise candidates instead of just blocking that exact bvid |
-| [v0.3.16](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.16) | 2026-04-30 | README backend-install order reshuffled: one-liner / Docker / direct script come first, the unsigned desktop package is moved into a `<details>` block at the end · adds a "log into every source you want to use" pre-install section explaining why Xiaohongshu specifically requires being logged in in the same browser the extension is installed (CDP mode strongly recommended) |
-| [v0.3.15](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.15) | 2026-04-30 | Round-up of Windows native-install pitfalls: CLI now forces stdout to UTF-8 on launch (no more `UnicodeEncodeError` on GBK consoles when emoji prints) · install.ps1's `python -c f"..."` rewritten as `print(a, b)` to dodge a PS 5.1 quoting bug · agent-install.md warns AI agents that `bash` on Windows often resolves to the WSL launcher · **fixes a registry bug where Ollama, registered only for embedding, was incorrectly used as a chat-completion fallback, causing `All providers failed (openai, ollama)` when the primary cloud LLM hit a transient error** |
-| [v0.3.14](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.14) | 2026-04-30 | Fixes a Windows GBK-locale bug where `/api/delight/pending-batch`, `/api/activity-feed`, etc. returned 500 on first hit: `MemoryLayer.load()/save()` and `bilibili.auth` cookie I/O now pin `encoding="utf-8"` instead of relying on the platform default. Includes a regression test that monkeypatches `builtins.open` to simulate Chinese Windows. |
-| [v0.3.13](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.13) | 2026-04-30 | Every install path now leads with "install the extension to auto-sync the cookie" instead of pushing the F12 dance: install.sh / install.ps1 status block, agent-install.md AI-agent contract, the CLI wizard's `_interactive_auth_setup`, docker-deployment.md, and openclaw-quickstart.md all updated. F12 demoted to a fallback. |
-| [v0.3.12](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.12) | 2026-04-30 | The browser extension now auto-syncs your Bilibili cookie to the backend — no more F12 dance. The extension reads the live cookie via `chrome.cookies` and POSTs it to a new `/api/bilibili/cookie` endpoint that validates against B站 nav, persists, hot-reloads the runtime, and broadcasts a WebSocket event. Cookie refreshes auto-resync via `chrome.cookies.onChanged`. |
-| [v0.3.11](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.11) | 2026-04-30 | Docker mode now ships an Ollama embedding sidecar by default (auto-pulls bge-m3, named-volume persisted) · `docker_runtime.py` seeds `[llm.embedding] provider=ollama` from env on first boot · CLI wizard (direct `openbiliclaw init`) also auto-installs Ollama |
-| [v0.3.10](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.10) | 2026-04-30 | When Ollama is picked for chat or embedding, the installer now auto-installs Ollama (brew on macOS / winget on Windows / install.sh on Linux), starts the daemon, and pulls the requested models. No more "I picked Ollama but it doesn't work because nothing is installed" |
-| [v0.3.9](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.9) | 2026-04-30 | One-liner installer now works on Windows PowerShell 5.1 (the default on Windows 10/11): TLS 1.2 prefix added to the install command, fixed `??` PS 7-only syntax inside install.ps1, in-script TLS 1.2 fallback for git/uv/pip calls |
-| [v0.3.8](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.8) | 2026-04-30 | `openbiliclaw init` now prints an upfront "expected 2–5 min" header + per-stage time estimates so users don't think the silent LLM step is hung |
-| [v0.3.7](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.7) | 2026-04-30 | One-line install **auto-runs `openbiliclaw init`** once credentials are filled in (pulls history / builds soul profile / runs first discovery), so the user doesn't have to do an extra manual step · agent-install.md Hard Rule flipped: run init by default · agent_bootstrap.py auto-init now handles Windows + Docker correctly |
-| [v0.3.6](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.6) | 2026-04-30 | Install wizard rewritten end-to-end for normal users: Ollama is now the default first choice · "OpenAI official" and "OpenAI-compatible self-hosted gateway" are split into separate menu entries · embedding question is its own clearly-explained step · Bilibili cookie prompt now teaches the F12 → Network steps |
-| [v0.3.5](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.5) | 2026-04-29 | 4-phase install wizard (base_url / triplet / embedding 4-way / per-module override) · clears `openai = protocol family` ambiguity · `agent_bootstrap.py` gains 7 new flags |
-| [v0.3.4](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.4) | 2026-04-29 | Native-Windows one-liner installer (PowerShell `install.ps1`, no Docker/WSL2) · `agent_bootstrap.py` Windows adaptation (taskkill / netstat-ano) |
-| **[v0.3.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.0)** | 2026-04-28 | General-purpose multi-source architecture (Xiaohongshu / Web adapters in production) · local Ollama embedding fallback · reshuffle 5x faster · cross-source topic quota |
-| [v0.2.1](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.2.1) | 2026-04-17 | OpenClaw integration (Socratic chat + interest probes) · Bilibili API resilience hardening |
-| [v0.2.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.2.0) | 2026-04-16 | macOS .app launch fix · multi-objective recommendation critique · pool hard cap · five-dimension PoolCurator |
-| [v0.1.0](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/v0.1.0) | 2026-04-13 | Initial release — end-to-end soul / discovery / recommendation pipeline |
+| **v0.3.45** | 2026-05-04 | "Reshuffle" stress-tested at 30 rounds, **all <1s** (P50 0.41s / P99 0.85s): MMR embedding warm-ahead into SQLite L2 during discovery, serve() switched to cache-only never calling the provider; `mark_pool_items_shown` detached from the critical path. |
+| v0.3.44 | 2026-05-04 | MMR diversification (α·relevance − β·max_cosine_to_picked) replaces pure string-quota caps; every reshuffle hits unique_topics=10/10 and top_topic_share≤10%. |
+| v0.3.37 | 2026-05-04 | Real-time popup ↔ backend sync: `delight.refreshed` / `pool_status` WebSocket events, `proactive_push_interval` 600 → 120. |
+| v0.3.26 | 2026-05-02 | LLM billing module (`openbiliclaw cost`) + cost-friendly defaults (reasoning off · discovery 8h); fresh installs target ≈¥0.5/day. |
+| v0.3.0 | 2026-04-28 | General-purpose multi-source architecture (Xiaohongshu / Web) · local Ollama embedding fallback · cross-source topic quota. |
 
-Full milestone history: [docs/changelog.md](docs/changelog.md) · All releases: [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)
+Full history: [docs/changelog.md](docs/changelog.md)
 
 ## 🗺️ Roadmap
 
