@@ -6,7 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,19 @@ class SupportsAccountClient(Protocol):
     ) -> list[Any]: ...
 
 
+def _client_is_authenticated(client: Any) -> bool:
+    """True when the client either has no auth concept or reports authed.
+
+    Tests pass plain stubs that don't expose ``is_authenticated``; for
+    those, we conservatively assume "authenticated" so behavior matches
+    pre-v0.3.57. Production ``BilibiliAPIClient`` exposes the real flag,
+    which is what gates the cookie-race short-circuit.
+    """
+    if not hasattr(client, "is_authenticated"):
+        return True
+    return bool(client.is_authenticated)
+
+
 class SupportsSoulAnalyzer(Protocol):
     async def analyze_events(self, events: list[dict[str, Any]]) -> None: ...
 
@@ -50,9 +63,31 @@ class AccountSyncService:
     max_items_per_folder: int = 50
     following_page_size: int = 100
     check_interval_seconds: int = 300
+    # v0.3.57+: tracks the cookie-not-ready → ready transition so
+    # ``sync_if_due`` only emits the "auth ready" INFO log once per
+    # session. Reset path is via fresh AccountSyncService instance,
+    # which is what ``rebuild_from_config`` already produces.
+    _last_seen_authenticated: bool = False
 
     async def sync_if_due(self) -> dict[str, object]:
         """Run one account sync only when the configured interval has elapsed."""
+        # v0.3.57+: skip the throttle check entirely while the cookie
+        # hasn't arrived. ``sync_now`` will short-circuit too — checking
+        # here just keeps the no-auth signal visible in run_forever logs
+        # without "not_due" noise on every tick of the 5-min poll loop.
+        authed = _client_is_authenticated(self.bilibili_client)
+        if not authed:
+            return {
+                "synced": False,
+                "new_event_count": 0,
+                "reason": "no_auth",
+            }
+        if not self._last_seen_authenticated:
+            self._last_seen_authenticated = True
+            logger.info(
+                "account_sync: bilibili cookie now ready — first history "
+                "fetch will run on this tick"
+            )
         state = self.memory_manager.load_account_sync_state()
         if not self._is_due(str(state.get("last_account_sync_at", ""))):
             return {
@@ -64,6 +99,19 @@ class AccountSyncService:
 
     async def sync_now(self) -> dict[str, object]:
         """Run one immediate incremental account sync."""
+        # v0.3.57+: cookie race short-circuit. Daemon often starts before
+        # the extension cookie sync arrives; without this gate, the first
+        # tick fetches with empty cookies, gets 0 items, stamps
+        # last_account_sync_at, and locks the next attempt out for
+        # ``sync_interval_hours`` (default 6h). Bail out before touching
+        # the network OR the timestamp so the next ``sync_if_due`` tick
+        # (5 min) still re-tries.
+        if not _client_is_authenticated(self.bilibili_client):
+            return {
+                "synced": False,
+                "new_event_count": 0,
+                "reason": "no_auth",
+            }
         state = self.memory_manager.load_account_sync_state()
         events: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -131,14 +179,27 @@ class AccountSyncService:
             "last_account_sync_error": str(state.get("last_sync_error", "")),
         }
 
+    # v0.3.57+: tighter retry while cookie hasn't arrived. The default
+    # ``check_interval_seconds`` of 300 is right for steady-state polling
+    # but stretches the cookie-race symptom — daemon up, cookie arrives
+    # ~2s later, but next history fetch waits up to 5 min. Drop to 15s
+    # until first auth, restore to ``check_interval_seconds`` after.
+    _UNAUTH_RETRY_INTERVAL_SECONDS: ClassVar[int] = 15
+
     async def run_forever(self) -> None:
         """Run account sync loop until cancelled."""
         while True:
+            authed_before = self._last_seen_authenticated
             try:
                 await self.sync_if_due()
             except Exception:
                 logger.exception("Unexpected error in account sync loop")
-            await asyncio.sleep(self.check_interval_seconds)
+            interval = (
+                self.check_interval_seconds
+                if self._last_seen_authenticated or authed_before
+                else self._UNAUTH_RETRY_INTERVAL_SECONDS
+            )
+            await asyncio.sleep(interval)
 
     def _filter_new_history(
         self,

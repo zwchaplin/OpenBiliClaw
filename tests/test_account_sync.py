@@ -222,6 +222,116 @@ async def test_account_sync_returns_partial_success_when_one_source_fails() -> N
     assert {event["event_type"] for event in memory.events} == {"view", "follow"}
 
 
+@dataclass
+class _CookieAwareClient:
+    """Client whose ``is_authenticated`` flips False→True after one tick.
+
+    Models the production race where the daemon starts, the cookie
+    arrives ~2s later via the extension push, and account_sync ticks
+    in between fire ``get_user_history`` against an empty cookie.
+    """
+
+    history_items: list[dict[str, Any]]
+    is_authenticated: bool = False
+    history_calls: int = 0
+
+    async def get_user_history(self, max_items: int = 100) -> list[dict[str, Any]]:
+        self.history_calls += 1
+        if not self.is_authenticated:
+            return []
+        return self.history_items[:max_items]
+
+    async def get_all_favorites(
+        self,
+        *,
+        max_folders: int = 10,
+        max_items_per_folder: int = 50,
+    ) -> list[FavoriteFolderWithItems]:
+        return []
+
+    async def get_following(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> list[FollowingUser]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_account_sync_skips_when_unauthenticated_without_burning_throttle() -> None:
+    """v0.3.57+: when the bilibili client has no cookie yet (extension
+    hasn't synced), sync_now must short-circuit WITHOUT stamping
+    ``last_account_sync_at``. Otherwise the 6-hour interval would lock
+    the next attempt out and history wouldn't get fetched until then.
+
+    Reproduces the 2026-05-05 production gap: cookie arrived at 03:33:27
+    but the first successful history fetch was 03:40:22 — 7 minutes
+    later — because account_sync's first tick happened at 03:33:25 with
+    an empty cookie, stamped the timestamp, and went silent.
+    """
+    from openbiliclaw.runtime.account_sync import AccountSyncService
+
+    memory = _FakeMemoryManager()
+    client = _CookieAwareClient(
+        history_items=[_history_item("BVAFTER", 200, "after cookie")],
+        is_authenticated=False,
+    )
+    service = AccountSyncService(
+        memory_manager=memory,
+        bilibili_client=client,
+        soul_engine=_FakeSoulEngine(),
+    )
+
+    # 1st tick — no cookie yet.
+    result = await service.sync_now()
+    assert result == {
+        "synced": False,
+        "new_event_count": 0,
+        "reason": "no_auth",
+    }
+    assert client.history_calls == 0  # Short-circuited before fetch.
+    # Crucial: timestamp NOT stamped, so sync_if_due will try again.
+    assert not memory.state.get("last_account_sync_at")
+
+    # Cookie arrives.
+    client.is_authenticated = True
+
+    # 2nd tick (via sync_if_due, which is what run_forever calls) — fires.
+    result = await service.sync_if_due()
+    assert result["synced"] is True
+    assert result["new_event_count"] == 1
+    assert client.history_calls == 1
+    # Now the timestamp gets stamped.
+    assert memory.state.get("last_account_sync_at")
+
+
+@pytest.mark.asyncio
+async def test_account_sync_uses_short_retry_interval_until_first_fetch_succeeds() -> None:
+    """v0.3.57+: until the first authenticated history fetch lands,
+    the per-tick due-check should not be gated by the 6-hour interval.
+    ``run_forever``'s 5-min ``check_interval_seconds`` becomes the de
+    facto retry budget — way better than the 6h-after-stamped baseline.
+    """
+    from openbiliclaw.runtime.account_sync import AccountSyncService
+
+    memory = _FakeMemoryManager()
+    client = _CookieAwareClient(history_items=[], is_authenticated=False)
+    service = AccountSyncService(
+        memory_manager=memory,
+        bilibili_client=client,
+        soul_engine=_FakeSoulEngine(),
+    )
+
+    # 5 sequential sync_if_due ticks with no auth. None should burn
+    # the throttle — every one stays ready to retry.
+    for _ in range(5):
+        result = await service.sync_if_due()
+        assert result.get("reason") == "no_auth"
+    assert client.history_calls == 0
+    assert not memory.state.get("last_account_sync_at")
+
+
 @pytest.mark.asyncio
 async def test_account_sync_run_forever_recovers_from_iteration_error(caplog) -> None:
     from openbiliclaw.runtime.account_sync import AccountSyncService
