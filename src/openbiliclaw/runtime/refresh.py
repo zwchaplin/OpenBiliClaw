@@ -545,10 +545,41 @@ class ContinuousRefreshController:
         contribute notification fatigue.
         """
         while True:
+            # Score un-scored pool items even when the discovery refresh
+            # tick early-exits (pool_at_cap or below_threshold). Without
+            # this, a steady-state pool that sits at cap silently starves
+            # delight scoring — observed 2026-05-04: scoring last ran on
+            # daemon startup at 03:15 and stopped for 9.5 hours because
+            # _run_refresh_plan never reached the precompute_pool_copy
+            # branch. ``prepare_delight_candidates`` calls precompute_pool_copy
+            # with limit=0, which still runs precompute_delight_scores on
+            # the up-to-50 un-scored items (relevance >= 0.55).
+            with suppress(Exception):
+                await self.prepare_delight_candidates()
+            # Snapshot delight count BEFORE prepare so we can detect a
+            # net new above-threshold delight (popup re-fetch trigger).
+            delight_count_before = self._safe_count_delight_candidates()
             with suppress(Exception):
                 await self._publish_delight_if_available()
             with suppress(Exception):
                 await self._publish_interest_probe_if_available()
+            delight_count_after = self._safe_count_delight_candidates()
+            net_new_delights = max(0, delight_count_after - delight_count_before)
+            if net_new_delights > 0:
+                with suppress(Exception):
+                    await self._publish_event(
+                        {
+                            "type": "delight.refreshed",
+                            "phase": "ready",
+                            "count": net_new_delights,
+                            "total_pending": delight_count_after,
+                            "message": (
+                                f"刚发现 {net_new_delights} 条新的惊喜推荐"
+                                if net_new_delights > 1
+                                else "刚发现一条新的惊喜推荐"
+                            ),
+                        }
+                    )
             await asyncio.sleep(self.proactive_push_interval_seconds)
 
     async def _tick_xhs_producer(self) -> None:
