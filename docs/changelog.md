@@ -4,6 +4,39 @@
 
 ---
 
+## v0.3.53: speculator gate + xhs_producer 节奏（2026-05-05 spec wave 3）
+
+### 背景
+
+`docs/plans/2026-05-05-discovery-runtime-fix-spec.md` U7 + U8。
+
+**U7 — speculator quality gate 全 drop**：
+production logs 一次 force_tick `generated=5, promoted=0, rejected=0`。LLM 给所有 5 个候选的 confidence 都是 **0.35**——`min_confidence=0.40` 正好刚高于 LLM 实际产出，全部被 drop。
+
+**U8 — xhs_producer 整 43 min 只跑 1 轮**：
+日志只看到一次 `xhs producer enqueued 5/5`。后续 ticks 全静默 skip——没有日志看不出原因。
+
+### 改动
+
+**U7 — speculator min_confidence 0.40 → 0.30**（`soul/speculator.py`）
+
+让 LLM 自然产出的 0.35 区间通过。下游 pipeline（specifics≥2 / reason≥20chars / domain shadow check / dedup）继续 gate "lazy" candidates。
+
+**U8 — xhs_producer 加 INFO log + 缩短 throttle**（`runtime/xhs_producer.py`）
+
+- `min_interval_hours: 4 → 1` — 4 小时 throttle 让池子整段时间不刷新。1 小时 cadence + daily_budget=30 = 24 enqueues/day（留 6 head room 给 manual / refresh-tick）
+- `_skip()` 在 reason 变化时打 INFO `xhs producer skip: reason=X`——operator 可以 grep 出为什么 producer 不跑（disabled / throttled / no_profile / no_keywords），不会 spam 同一 reason 每分钟一条
+
+### 影响
+
+- speculator 现在会真的有 promoted candidates（gate 通过率从 0% 回升到 ~50% 估计）
+- xhs producer 1 小时 cadence 让池子持续刷新（之前一次后停 4 小时太长）
+- 日志可见性：xhs producer skip reason 转换时打 INFO
+
+测试：830/830 通过，无新增。
+
+---
+
 ## v0.3.52: discovery 候选并发评估 30 → 90（2026-05-05 spec wave 2）
 
 ### 背景

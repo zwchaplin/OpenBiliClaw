@@ -42,7 +42,13 @@ class XhsTaskProducer:
     llm_service: LLMService
     enabled: bool = True
     daily_budget: int = 30
-    min_interval_hours: int = 4
+    # v0.3.53+: lowered 4 → 1. Production logs (2026-05-05) showed
+    # the producer firing only once per 43-minute session because the
+    # 4-hour throttle is way too long for pool freshness — XHS pool
+    # was effectively static while user kept reshuffling. 1-hour
+    # cadence with daily_budget=30 caps at 24/30 enqueues per day,
+    # leaves 6 head room for manual / refresh-tick triggers.
+    min_interval_hours: int = 1
     keywords_per_cycle: int = 5
     _last_skip_reason: str = field(default="", init=False)
 
@@ -120,6 +126,15 @@ class XhsTaskProducer:
         )
 
     def _skip(self, reason: str) -> dict[str, object]:
+        # v0.3.53+: log skip reason on transition (not every minute) so
+        # operators can grep for why the producer isn't firing without
+        # drowning the log in identical-reason WARNINGs. Reasons:
+        #   disabled       — explicitly turned off in config
+        #   throttled      — last enqueue within ``min_interval_hours``
+        #   no_profile     — soul profile not built yet (init window)
+        #   no_keywords    — LLM keyword generation returned 0 items
+        if reason != self._last_skip_reason:
+            logger.info("xhs producer skip: reason=%s", reason)
         self._last_skip_reason = reason
         return {"enqueued": 0, "attempted": 0, "reason": reason}
 

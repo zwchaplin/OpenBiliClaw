@@ -448,7 +448,7 @@ class InterestSpeculator:
         max_active: int = 5,
         max_primary_interests: int = 15,
         max_secondary_interests: int = 60,
-        min_confidence: float = 0.40,
+        min_confidence: float = 0.30,
     ) -> None:
         self._llm_service = llm_service
         self._data_dir = data_dir
@@ -460,19 +460,21 @@ class InterestSpeculator:
         self._max_primary_interests = max_primary_interests
         self._max_secondary_interests = max_secondary_interests
         # Quality gate: discard candidates whose self-rated confidence
-        # falls below this threshold. Originally 0.48 (calibrated for an
-        # earlier profile state); production logs (2026-05-04, after
-        # the SoulEngine usage_recorder wiring fix made costs visible)
-        # showed DeepSeek consistently scoring its own probes at
-        # 0.35-0.46 once the user has 25+ confirmed likes — the model
-        # gets conservative when it feels the profile is "well covered".
-        # 0.45 still rejected ~all candidates ("心理防御机制与认知陷阱拆解"
-        # at 0.40, "纯环境音与沉浸式白噪音" at 0.35, etc). 0.40 lets the
-        # LLM's typical-confidence output through; the downstream
-        # pipeline (specifics≥2 / reason≥20chars / domain not shadowing
-        # existing like / dedup against active+cooldown) still catches
-        # the genuinely lazy candidates. Below 0.40 is "I'm just naming
-        # random domains" territory, keep that gated.
+        # falls below this threshold. Threshold history:
+        #   0.48 → 0.40 (v0.3.x, "DeepSeek scores 0.35-0.46 once profile
+        #               has 25+ likes; 0.40 lets typical output through")
+        #   0.40 → 0.30 (v0.3.53, 2026-05-05): production logs showed
+        #               speculator force_tick generated=5 / promoted=0 —
+        #               every candidate hit confidence=0.35 exactly,
+        #               i.e. the LLM was nailed at 0.35 for a calibrated
+        #               user. 0.40 was JUST above LLM's actual output
+        #               band, dropping all 5. 0.30 lets the LLM's
+        #               natural confidence range through; downstream
+        #               pipeline (specifics≥2 / reason≥20chars /
+        #               domain not shadowing existing like / dedup
+        #               against active+cooldown) still rejects lazy
+        #               candidates. Below 0.30 is "naming random
+        #               domains" territory.
         self._min_confidence = min_confidence
 
     def _load_state(self) -> SpeculativeState:
