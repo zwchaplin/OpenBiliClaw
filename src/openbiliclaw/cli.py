@@ -111,6 +111,7 @@ _INIT_DISCOVERY_PLAN = [
 _INIT_POOL_TARGET_COUNT = 15
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -3370,6 +3371,175 @@ def _notify_running_server_init_completed(
     except Exception:
         # Server not running — nothing to notify, and that's fine.
         pass
+
+
+def _run_single_source_bootstrap(
+    *,
+    source_label: str,
+    enqueue: Callable[[], str | None],
+    collect: Callable[[str | None], tuple[list[dict[str, Any]], dict[str, int], str]],
+    propagate: bool,
+    wait_seconds: float,
+    summary_renderer: Callable[[dict[str, int], str, int], None],
+) -> None:
+    """Shared core for ``fetch-douyin`` / ``fetch-xhs`` standalone commands.
+
+    Standalone test-friendly path that exercises ONLY the per-source
+    bootstrap pipeline — no B站 fetches, no soul-engine, no discovery.
+    Lets a user (or CI) verify the extension+backend+memory wire for
+    one source at a time without paying the full ``init`` cost.
+
+    Flow: enqueue → kick → wait → collect → optionally propagate
+    events to memory → render summary. Mirrors the relevant slice of
+    ``init`` exactly so behaviour parity is preserved.
+    """
+    _prepare_init_runtime()
+    _print_page_title(f"{source_label} 数据拉取", "扩展任务 + 后端入库 单源测试")
+    console.print(
+        f"[dim]启动 {source_label} bootstrap 任务,等扩展执行(最多 {wait_seconds:.0f}s)...[/dim]"
+    )
+
+    task_id = enqueue()
+    if not task_id:
+        console.print(
+            f"[bold red]无法入队 {source_label} 任务[/bold red]"
+            " — 看上面的提示(数据库 / 预算 / 任务表问题)。"
+        )
+        raise typer.Exit(code=1)
+
+    events, scope_counts, status_label = collect(task_id)
+
+    summary_renderer(scope_counts, status_label, len(events))
+
+    if not propagate:
+        console.print("[dim]--no-propagate:事件不写入 memory(只跑了扩展+后端这条线)。[/dim]")
+        return
+
+    if not events:
+        return
+
+    memory = _build_memory_manager()
+
+    async def _propagate_all() -> None:
+        for event in events:
+            await memory.propagate_event(event)
+
+    asyncio.run(_propagate_all())
+    console.print(
+        f"[green]✓[/green] {len(events)} 条事件已写入 memory(可用 "
+        f"`openbiliclaw profile` 查看影响,完整画像生成请跑 `openbiliclaw init`)。"
+    )
+
+
+@app.command("fetch-douyin")
+def fetch_douyin(
+    wait_seconds: float = typer.Option(
+        60.0,
+        "--wait-seconds",
+        "-w",
+        help="等扩展回结果的最大秒数(默认 60s,比 init 的 30s 多一倍稳)。",
+    ),
+    no_propagate: bool = typer.Option(
+        False,
+        "--no-propagate",
+        help="只跑扩展 + 后端入库 → 不写 memory。用于纯链路测试。",
+    ),
+) -> None:
+    """单独测试抖音 bootstrap(独立于 ``init``).
+
+    用于在不重新跑完整 init 的情况下逐项验证抖音端到端链路:
+    CLI 入队 → /api/sources/dy/kick → 扩展 dispatcher → 4 个 scope 串
+    跑完 → POST 回 /api/sources/dy/task-result → 事件 propagate 到 memory。
+
+    需要的前提:
+      1. ``openbiliclaw start`` daemon 在跑(否则 kick 没人接,只能等 60s 兜底 alarm)
+      2. 浏览器扩展已装且 service-worker 在线
+      3. 浏览器登录了 https://www.douyin.com
+    """
+
+    def _render(scope_counts: dict[str, int], status_label: str, event_count: int) -> None:
+        if status_label == "ok":
+            console.print(
+                "  抖音 "
+                f"发布 [green]{scope_counts.get('dy_post', 0)}[/green] 条"
+                f" / 收藏 [green]{scope_counts.get('dy_collect', 0)}[/green] 个"
+                f" / 点赞 [green]{scope_counts.get('dy_like', 0)}[/green] 个"
+                f" / 关注 [green]{scope_counts.get('dy_follow', 0)}[/green] 人"
+            )
+            console.print(f"  共生成 [green]{event_count}[/green] 条事件。")
+        elif status_label == "empty":
+            console.print(
+                "  [yellow]抖音任务跑通但 0 条 videos —— 未登录抖音(常见,"
+                "抖音对未登录返回 200+空 body),或风控触发。[/yellow]"
+            )
+        elif status_label == "timeout":
+            console.print(
+                "  [dim]抖音任务超时:扩展未连接 / 任务还在跑。"
+                "可加 --wait-seconds 120 重试,或确认 daemon + 扩展都在跑。[/dim]"
+            )
+        elif status_label == "failed":
+            console.print("  [yellow]抖音任务失败 —— 检查扩展日志。[/yellow]")
+
+    _run_single_source_bootstrap(
+        source_label="抖音",
+        enqueue=_enqueue_dy_bootstrap_task,
+        collect=lambda tid: _collect_dy_bootstrap_events(tid, max_wait_seconds=wait_seconds),
+        propagate=not no_propagate,
+        wait_seconds=wait_seconds,
+        summary_renderer=_render,
+    )
+
+
+@app.command("fetch-xhs")
+def fetch_xhs(
+    wait_seconds: float = typer.Option(
+        60.0,
+        "--wait-seconds",
+        "-w",
+        help="等扩展回结果的最大秒数(默认 60s)。",
+    ),
+    no_propagate: bool = typer.Option(
+        False,
+        "--no-propagate",
+        help="只跑扩展 + 后端入库 → 不写 memory。",
+    ),
+) -> None:
+    """单独测试小红书 bootstrap(独立于 ``init``).
+
+    用于在不重新跑完整 init 的情况下逐项验证小红书端到端链路。
+    需要 daemon + 扩展 + 浏览器登录 https://www.xiaohongshu.com。
+    """
+
+    def _render(scope_counts: dict[str, int], status_label: str, event_count: int) -> None:
+        if status_label == "ok":
+            console.print(
+                "  小红书 "
+                f"收藏 [green]{scope_counts.get('saved', 0)}[/green] 个"
+                f" / 点赞 [green]{scope_counts.get('liked', 0)}[/green] 个"
+                f" / 浏览记录 [green]{scope_counts.get('xhs_history', 0)}[/green] 个"
+            )
+            console.print(f"  共生成 [green]{event_count}[/green] 条事件。")
+        elif status_label == "empty":
+            console.print(
+                "  [yellow]小红书任务跑通但 0 条 notes —— 可能未登录 /"
+                "个人主页没有公开收藏 / 页面 state 漂移。[/yellow]"
+            )
+        elif status_label == "timeout":
+            console.print(
+                "  [dim]小红书任务超时:扩展未连接 / 任务还在跑。"
+                "可加 --wait-seconds 120 重试。[/dim]"
+            )
+        elif status_label == "failed":
+            console.print("  [yellow]小红书任务失败 —— 检查扩展日志。[/yellow]")
+
+    _run_single_source_bootstrap(
+        source_label="小红书",
+        enqueue=_enqueue_xhs_bootstrap_task,
+        collect=lambda tid: _collect_xhs_bootstrap_events(tid, max_wait_seconds=wait_seconds),
+        propagate=not no_propagate,
+        wait_seconds=wait_seconds,
+        summary_renderer=_render,
+    )
 
 
 @app.command()
