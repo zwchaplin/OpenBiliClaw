@@ -278,6 +278,9 @@ async function clickToScope(scope: DouyinScope): Promise<ClickToScopeReport> {
     profile_link_found: false,
     sub_tab_found: false,
   };
+  // Step 1: get to /user/self if we're still on the homepage.
+  // Click is preferred (mirrors user behaviour, avoids risk-control
+  // friction); pushState fallback if no profile link found.
   const onProfile = location.pathname.startsWith("/user/");
   if (!onProfile) {
     const profileLink = findProfileLink();
@@ -285,45 +288,44 @@ async function clickToScope(scope: DouyinScope): Promise<ClickToScopeReport> {
     if (profileLink) {
       profileLink.click();
     } else {
-      // SPA-route fallback: pushState + popstate. We deliberately do
-      // NOT use window.location.href because that triggers a real
-      // document commit, which kills the runScope context (the
-      // content script gets re-injected at document_start of the
-      // new page, but the OLD runScope's promise resolves into the
-      // void and the dispatcher's DY_SCOPE_EXECUTE message is never
-      // re-sent). pushState + popstate stays inside the same
-      // document, so React Router routes to /user/self without
-      // unmounting our scope-runner.
       window.history.pushState({}, "", "/user/self");
       window.dispatchEvent(new PopStateEvent("popstate"));
     }
-    // SPA route is async; let React mount the profile page.
     await sleep(2_500);
     report.page_url = location.href;
   }
 
-  if (scope === "dy_post") {
-    report.sub_tab_found = true; // default tab, no click needed
-    return report;
-  }
-  const subTab = findScopeSubTab(scope);
-  report.sub_tab_found = subTab !== null;
-  if (subTab) {
-    subTab.click();
-  } else {
-    // pushState + popstate fallback (NOT window.location.href — see
-    // the profile-link fallback above for why; same reason: full
-    // reload kills the runScope context).
-    const queryMap: Record<DouyinScope, string> = {
-      dy_post: "",
-      dy_collect: "?showTab=favorite_collection",
-      dy_like: "?showTab=like",
-      dy_follow: "?showTab=following",
-    };
-    window.history.pushState({}, "", location.pathname + queryMap[scope]);
+  // Step 2: navigate to the target scope tab via pushState. Verified
+  // empirically (2026-05-08 e2e + url_probe) that clicking
+  // [data-e2e="user-<scope>-tab"] elements is a no-op when Douyin's
+  // React Router thinks we're already on the same route — the URL
+  // doesn't change and no /aweme/v1/web/aweme/<scope>/ request fires.
+  // pushState + popstate forces React Router to detect the route
+  // change and re-mount the scope tab, which DOES trigger the data
+  // fetch.
+  //
+  // Bounce through a neutral URL first when the current URL already
+  // points at the target tab (e.g. landing page from previous run was
+  // ?showTab=like and scope=dy_like). Without the bounce, pushing the
+  // same URL is a true no-op.
+  const queryMap: Record<DouyinScope, string> = {
+    dy_post: "",
+    dy_collect: "?showTab=favorite_collection",
+    dy_like: "?showTab=like",
+    dy_follow: "?showTab=following",
+  };
+  const targetUrl = "/user/self" + queryMap[scope];
+  const currentRelative = location.pathname + location.search;
+  if (currentRelative === targetUrl) {
+    // Same — bounce off a sentinel query to force re-route.
+    window.history.pushState({}, "", "/user/self?_obc=" + Date.now());
     window.dispatchEvent(new PopStateEvent("popstate"));
+    await sleep(400);
   }
-  await sleep(1_500); // allow the new sub-tab to fire its first /aweme/.../<scope>/
+  window.history.pushState({}, "", targetUrl);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  report.sub_tab_found = true; // pushState always succeeds
+  await sleep(2_500); // allow React Router to refetch + render
   report.page_url = location.href;
   return report;
 }
