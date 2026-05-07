@@ -21,6 +21,15 @@
 
 import type { DouyinBootstrapItem, DouyinScope } from "../main/dy-fetch-tap.js";
 
+// TEMP DEBUG: relay content-script events to daemon (see debug-log.ts).
+function debugLog(event: string, data?: unknown): void {
+  void fetch("http://127.0.0.1:8420/api/sources/_debug/log", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source: "dy-cs", event, data: data ?? null }),
+  }).catch(() => {});
+}
+
 // Dynamic import for the chrome-lifecycle code path so node:test's
 // --experimental-strip-types resolver doesn't have to chase the
 // `.js → .ts` chain at module-load time. Pure helpers exported from
@@ -277,6 +286,11 @@ async function clickToScope(scope: DouyinScope): Promise<ClickToScopeReport> {
 }
 
 async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
+  debugLog("runScope:start", {
+    scope: msg.scope,
+    page_url: location.href,
+    inject_status: msg.debug_inject_status,
+  });
   const { BootstrapItemSink, dyShouldContinueScroll, ingestMainWorldFetchMessage } =
     await loadTaskExecutorHelpers();
   const sink = new BootstrapItemSink({ maxItemsPerScope: msg.max_items_per_scope });
@@ -310,6 +324,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
     // than chrome.tabs.update URL jumps). clickToScope handles both
     // the homepage→profile transition and the sub-tab switch.
     clickReport = await clickToScope(msg.scope);
+    debugLog("runScope:clickToScope_done", { scope: msg.scope, clickReport });
 
     // The MAIN-world fetch-tap auto-installs after waitForDouyinSdk
     // resolves. Give it a beat to settle so any pageload-time
@@ -400,13 +415,23 @@ export function registerDyScopeExecutor(): void {
     (message: Record<string, unknown>, _sender, sendResponse) => {
       if (message.action !== "DY_SCOPE_EXECUTE") return false;
       const data = message.data;
-      if (!isValidScopeExecuteMessage(data)) return false;
+      if (!isValidScopeExecuteMessage(data)) {
+        debugLog("listener:invalid_scope_execute", { message });
+        return false;
+      }
+      debugLog("listener:DY_SCOPE_EXECUTE_received", {
+        scope: (data as { scope: string }).scope,
+        page_url: location.href,
+      });
 
       void runScope(data).then((result) => {
-        chrome.runtime.sendMessage({ action: "DY_SCOPE_RESULT", data: result }).catch(() => {
-          // Service worker may have torn down between scopes; the
-          // dispatcher will eventually time out and send status=failed
-          // to the backend, so silent here is fine.
+        debugLog("runScope:returning", {
+          scope: result.scope,
+          status: result.status,
+          items_count: result.items.length,
+        });
+        chrome.runtime.sendMessage({ action: "DY_SCOPE_RESULT", data: result }).catch((err) => {
+          debugLog("listener:DY_SCOPE_RESULT_send_failed", { error: String(err) });
         });
       });
 

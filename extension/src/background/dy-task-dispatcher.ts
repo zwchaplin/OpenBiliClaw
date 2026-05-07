@@ -54,6 +54,15 @@ function releaseDispatcherMutex(label: string): void {
   }
 }
 
+// TEMP DEBUG: extension-side log relay → daemon (see debug-log.ts).
+function debugLog(event: string, data?: unknown): void {
+  void fetch("http://127.0.0.1:8420/api/sources/_debug/log", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source: "dy", event, data: data ?? null }),
+  }).catch(() => {});
+}
+
 // buildScopeUrl is loaded lazily via dynamic import inside the
 // chrome-lifecycle code path (executeTask / navigateToCurrentScope).
 // Reason: node:test's --experimental-strip-types resolver can't follow
@@ -282,9 +291,21 @@ function onTabReady(tabId: number, callback: () => void): void {
 let _lastInjectStatus: string = "not_attempted";
 
 function sendScopeExecuteMessage(): void {
-  if (!progress || !taskTabId) return;
+  if (!progress || !taskTabId) {
+    debugLog("sendScopeExecute:no_progress_or_tab", {
+      hasProgress: !!progress,
+      taskTabId,
+    });
+    return;
+  }
   const scope = progress.scopes[progress.current_scope_idx];
-  if (!scope) return;
+  if (!scope) {
+    debugLog("sendScopeExecute:no_scope_at_idx", {
+      idx: progress.current_scope_idx,
+    });
+    return;
+  }
+  debugLog("sendScopeExecute:start", { scope, idx: progress.current_scope_idx });
   void chrome.tabs
     .sendMessage(taskTabId, {
       action: "DY_SCOPE_EXECUTE",
@@ -297,7 +318,8 @@ function sendScopeExecuteMessage(): void {
         debug_inject_status: _lastInjectStatus,
       },
     })
-    .catch(() => {
+    .catch((err) => {
+      debugLog("sendScopeExecute:sendMessage_failed", { error: String(err) });
       // Synthesise an empty per-scope result so the state machine
       // still advances; this is what we'd see if the user landed
       // on a Douyin login wall or risk-control page where our
@@ -351,13 +373,19 @@ async function injectFetchTapInto(tabId: number): Promise<void> {
 }
 
 export async function executeTask(task: DyTask): Promise<void> {
-  if (taskInFlight) return;
+  debugLog("executeTask:start", { task_id: task.id, taskInFlight });
+  if (taskInFlight) {
+    debugLog("executeTask:already_in_flight");
+    return;
+  }
   // Cross-source mutex — bail if XHS dispatcher is currently
   // holding the foreground-tab slot. The next alarm fires in 60s
   // and we'll retry then. Without this guard, daemon's continuous
   // _loop_xhs_producer can race with a user's manual fetch-douyin
   // and both dispatchers fight for browser focus.
-  if (!tryAcquireDispatcherMutex("dy")) return;
+  const mutexAcquired = tryAcquireDispatcherMutex("dy");
+  debugLog("executeTask:mutex", { acquired: mutexAcquired });
+  if (!mutexAcquired) return;
   taskInFlight = true;
   currentTask = task;
 
@@ -386,7 +414,9 @@ export async function executeTask(task: DyTask): Promise<void> {
   let tab: chrome.tabs.Tab;
   try {
     tab = await chrome.tabs.create({ url: "https://www.douyin.com/", active: true });
-  } catch {
+    debugLog("executeTask:tab_created", { tabId: tab.id });
+  } catch (err) {
+    debugLog("executeTask:tab_create_failed", { error: String(err) });
     await postTaskResult({
       task_id: task.id,
       status: "failed",
@@ -416,7 +446,11 @@ export async function executeTask(task: DyTask): Promise<void> {
   // session the whole time. No more chrome.tabs.update between
   // scopes; fetch-tap stays installed across SPA routes.
   onTabReady(taskTabId, () => {
-    void injectFetchTapInto(taskTabId!).then(sendScopeExecuteMessage);
+    debugLog("executeTask:tab_ready", { tabId: taskTabId });
+    void injectFetchTapInto(taskTabId!).then(() => {
+      debugLog("executeTask:inject_done", { inject_status: _lastInjectStatus });
+      sendScopeExecuteMessage();
+    });
   });
 }
 
@@ -427,6 +461,13 @@ export async function executeTask(task: DyTask): Promise<void> {
  * next scope or finalises the task with status=ok.
  */
 export async function handleDyScopeResult(result: DyScopeResult): Promise<void> {
+  debugLog("handleDyScopeResult", {
+    scope: result.scope,
+    status: result.status,
+    items_count: result.items.length,
+    scope_count: result.scope_count,
+    debug: result.debug,
+  });
   if (!progress || result.task_id !== progress.task_id) return;
   // Reject results from outside the current scope (defensive; the
   // content script should only emit for the scope we asked it to).

@@ -228,6 +228,18 @@ class XhsTaskQueue:
         daily_budget: int = 100,
     ) -> str | None:
         """Enqueue a task and return its id, or None when budget is exhausted."""
+        # TEMP DEBUG: log the full call stack on every XHS enqueue so
+        # we can trace why bootstrap_profile tasks appeared without
+        # an obvious CLI invocation. Will be reverted after we find
+        # the source.
+        import traceback
+
+        logger.warning(
+            "[xhs-debug] XhsTaskQueue.enqueue_with_id type=%s called from:\n%s",
+            task_type,
+            "".join(traceback.format_stack(limit=20)),
+        )
+
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         count_today = self._db.conn.execute(
             "SELECT COUNT(*) FROM xhs_tasks WHERE type = ? AND created_at >= ?",

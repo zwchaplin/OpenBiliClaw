@@ -1956,6 +1956,17 @@ def _enqueue_xhs_bootstrap_task() -> str | None:
     scroll_rounds = int(os.environ.get("OPENBILICLAW_XHS_BOOTSTRAP_SCROLL_ROUNDS", "15"))
     max_items = int(os.environ.get("OPENBILICLAW_XHS_BOOTSTRAP_MAX_ITEMS", "300"))
 
+    # TEMP DEBUG (will be reverted after we trace the unexpected
+    # XHS bootstrap_profile enqueues): log the full call stack so
+    # we can see exactly which code path triggered this enqueue.
+    import logging
+    import traceback
+
+    logging.getLogger(__name__).warning(
+        "[xhs-debug] _enqueue_xhs_bootstrap_task called from:\n%s",
+        "".join(traceback.format_stack(limit=15)),
+    )
+
     try:
         queue = XhsTaskQueue(database)
         task_id = queue.enqueue_with_id(

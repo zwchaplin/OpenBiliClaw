@@ -2244,6 +2244,13 @@ def create_app(
 
         import json as _json
 
+        # TEMP DEBUG: surface every served task type so we can see
+        # what the extension dispatcher is consuming.
+        logger.warning(
+            "[xhs-debug] /api/sources/xhs/next-task served: type=%s id=%s",
+            task.get("type"),
+            str(task.get("id", ""))[:8],
+        )
         payload = _json.loads(task["payload_json"]) if task.get("payload_json") else {}
         return {
             "id": task["id"],
@@ -2472,6 +2479,18 @@ def create_app(
     # /api/runtime-stream WebSocket so the dispatcher polls immediately
     # instead of waiting for the next alarm. The 60s alarm stays as
     # fallback for the WS-down case.
+
+    # TEMP DEBUG: extension-side log relay. Lets the service-worker
+    # dispatcher POST debug events here so they end up in the daemon
+    # log alongside backend-side activity. Will be reverted before
+    # release.
+    @app.post("/api/sources/_debug/log")
+    async def ext_debug_log(payload: dict[str, Any]) -> dict[str, Any]:
+        source = str(payload.get("source", "?"))[:8]
+        event = str(payload.get("event", "?"))[:80]
+        data = payload.get("data")
+        logger.warning("[ext-debug] [%s] %s data=%s", source, event, data)
+        return {"ok": True}
 
     @app.post("/api/sources/xhs/kick")
     async def xhs_task_kick() -> dict[str, Any]:
