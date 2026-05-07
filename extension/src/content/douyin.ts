@@ -104,6 +104,7 @@ interface ScopeResultPayload {
     aweme_messages_received: number;
     install_messages_received: number;
     dom_items_harvested?: number;
+    end_of_feed?: string;
     inject_status?: string;
     page_url?: string;
     profile_link_found?: boolean;
@@ -471,6 +472,44 @@ function findScopeScrollerHeight(): number {
   return 0;
 }
 
+/**
+ * Detect Douyin's "no more content" indicator on the current tab.
+ * Returns the matched phrase when found (so the caller can log it),
+ * or "" when the list still has more to load.
+ *
+ * Strategy: walk every text-bearing element under document.body and
+ * check the trimmed visible text. Limit to short text nodes
+ * (< 30 chars) so we don't false-match a long description that
+ * happens to contain "没有".
+ */
+const END_OF_FEED_PHRASES: readonly string[] = [
+  "暂时没有更多",
+  "没有更多了",
+  "没有更多内容",
+  "已加载全部",
+  "已经到底",
+  "到底啦",
+  "已经到底啦",
+  "no more",
+  "the end",
+];
+
+function detectEndOfFeed(): string {
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      'div, span, p, [class*="loading"], [class*="end"], [class*="finish"]',
+    ),
+  );
+  for (const el of candidates) {
+    const text = (el.textContent ?? "").trim();
+    if (!text || text.length > 30) continue;
+    for (const phrase of END_OF_FEED_PHRASES) {
+      if (text.includes(phrase)) return text;
+    }
+  }
+  return "";
+}
+
 async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
   debugLog("runScope:start", {
     scope: msg.scope,
@@ -528,6 +567,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
     profile_link_found: false,
     sub_tab_found: false,
   };
+  let endOfFeedPhrase = "";
   try {
     // Navigate via UI clicks (more natural to Douyin risk control
     // than chrome.tabs.update URL jumps). clickToScope handles both
@@ -579,6 +619,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
 
       const afterCount = sink.scopeCounts()[msg.scope];
       const afterDomSize = document.querySelectorAll(anchorSelector).length;
+      endOfFeedPhrase = detectEndOfFeed();
       debugLog("scroll_round", {
         scope: msg.scope,
         round,
@@ -588,9 +629,11 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
         afterDomSize,
         scrollY: window.scrollY,
         innerScrollerHeight: findScopeScrollerHeight(),
+        endOfFeed: endOfFeedPhrase,
       });
       stagnantRounds = afterCount > beforeCount ? 0 : stagnantRounds + 1;
 
+      if (endOfFeedPhrase) break; // page tells us we're done
       if (
         !dyShouldContinueScroll({
           currentCount: afterCount,
@@ -621,6 +664,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
         aweme_messages_received: awemeMessagesReceived,
         install_messages_received: _installMessagesReceived,
         dom_items_harvested: domItemsHarvested,
+        end_of_feed: endOfFeedPhrase,
         inject_status: msg.debug_inject_status,
         page_url: clickReport.page_url,
         profile_link_found: clickReport.profile_link_found,
@@ -640,6 +684,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
         aweme_messages_received: awemeMessagesReceived,
         install_messages_received: _installMessagesReceived,
         dom_items_harvested: domItemsHarvested,
+        end_of_feed: endOfFeedPhrase,
         inject_status: msg.debug_inject_status,
         page_url: clickReport.page_url,
         profile_link_found: clickReport.profile_link_found,
