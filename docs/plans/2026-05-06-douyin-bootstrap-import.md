@@ -134,9 +134,12 @@ Export from `dy-fetch-tap.ts`:
 - `classifyDouyinResponseUrl(url: string): DouyinScope | null`
 - `parseAwemeListResponse(json, scope): DouyinBootstrapItem[]`
 - `parseUserFollowListResponse(json): DouyinBootstrapItem[]` (separate JSON shape)
+- `waitForDouyinSdk(target: Window, timeoutMs: number): Promise<boolean>` — resolves true when `target.byted_acrawler` exists, false on timeout
 - `installFetchTap(target: Window, postBack: (items, scope) => void): () => void` — wraps `target.fetch` and `target.XMLHttpRequest.prototype.send`, returns disposer
 
 Wrap responses by tee-ing `Response.clone()` then calling `.json()` off the clone so the page's own consumer is unaffected. **Never modify the request.** On parse, `postMessage` to `window` with a sentinel type like `OPENBILICLAW_DOUYIN_AWEME_PAGE`.
+
+**Critical timing note** (verified 2026-05-07 via chrome-devtools MCP — see design doc §3 step 5): Douyin's page bundle wraps `window.fetch` with its own axios-style wrapper *after* document load. A `document_start` injection is shadowed and captures zero responses. The bootstrap content script must `await waitForDouyinSdk(window, 8000)` (polling for `window.byted_acrawler`) **before** calling `installFetchTap`. Wrapping the SDK's wrapper preserves the signing (their wrapper signs internally) and adds our observation as the outermost layer. Tests for `waitForDouyinSdk` use a mocked clock; tests for `installFetchTap` pass a fake `Window` with a stub `fetch` so the SDK-wrapping concern doesn't bleed into pure-parser tests.
 
 **Step 4: Verify green**
 
