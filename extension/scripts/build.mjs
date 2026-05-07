@@ -18,6 +18,10 @@ const entrypoints = [
     outfile: resolve(root, "dist/content/xiaohongshu.js"),
   },
   {
+    entry: resolve(root, "src/content/douyin.ts"),
+    outfile: resolve(root, "dist/content/douyin.js"),
+  },
+  {
     entry: resolve(root, "src/main/xhs-token-sniffer.ts"),
     outfile: resolve(root, "dist/main/xhs-token-sniffer.js"),
   },

@@ -19,6 +19,8 @@ import {
   startDyTaskPolling,
   handleDyTaskAlarm,
   handleDyTaskResult,
+  handleDyScopeResult,
+  type DyScopeResult,
   type DyTaskResult,
 } from "./dy-task-dispatcher.js";
 import {
@@ -334,6 +336,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.action === "DY_TASK_RESULT") {
     void handleDyTaskResult(message.data as DyTaskResult)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error: unknown) => {
+        sendResponse({ ok: false, error: String(error) });
+      });
+    return true;
+  }
+  if (message.action === "DY_SCOPE_RESULT") {
+    void handleDyScopeResult(message.data as DyScopeResult)
       .then(() => {
         sendResponse({ ok: true });
       })

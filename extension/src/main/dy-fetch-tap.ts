@@ -251,3 +251,35 @@ export function installFetchTap(
     w.fetch = originalFetch;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Auto-install when loaded as a content_scripts MAIN-world script
+// ---------------------------------------------------------------------------
+//
+// Side-effect block guarded by ``typeof window !== "undefined"`` so
+// node:test importing the module for pure-helper tests doesn't trigger
+// any real installation. Mirrors the xhs-state-bridge.ts pattern.
+
+const FETCH_TAP_MESSAGE_TYPE = "OPENBILICLAW_DOUYIN_AWEME_PAGE";
+
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  void waitForDouyinSdk(window, 8_000).then((ready) => {
+    if (!ready) {
+      // SDK never loaded — page might not be Douyin (extension was
+      // injected somewhere unexpected) or Douyin shipped a non-SDK
+      // build. Fail open: don't install, let the content-script
+      // executor's per-scope timeout fire and report empty.
+      // eslint-disable-next-line no-console
+      console.debug("[OpenBiliClaw] dy fetch-tap skipped: SDK not detected");
+      return;
+    }
+    installFetchTap(window, (items, scope) => {
+      window.postMessage(
+        { type: FETCH_TAP_MESSAGE_TYPE, scope, items },
+        window.location.origin,
+      );
+    });
+    // eslint-disable-next-line no-console
+    console.debug("[OpenBiliClaw] dy fetch-tap installed (MAIN world)");
+  });
+}

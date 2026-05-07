@@ -15,6 +15,7 @@
     "host_permissions": [
         "*://*.bilibili.com/*",
         "*://*.xiaohongshu.com/*",
+        "*://*.douyin.com/*",
         "http://127.0.0.1:8420/*",
         "http://localhost:8420/*"
     ],
@@ -47,6 +48,25 @@
             "js": [
                 "dist/main/xhs-token-sniffer.js",
                 "dist/main/xhs-state-bridge.js"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        },
+        {
+            "matches": [
+                "*://*.douyin.com/*"
+            ],
+            "js": [
+                "dist/content/douyin.js"
+            ],
+            "run_at": "document_idle"
+        },
+        {
+            "matches": [
+                "*://*.douyin.com/*"
+            ],
+            "js": [
+                "dist/main/dy-fetch-tap.js"
             ],
             "run_at": "document_start",
             "world": "MAIN"
