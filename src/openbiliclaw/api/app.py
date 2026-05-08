@@ -2513,6 +2513,20 @@ def create_app(
                 await publish({"type": "dy_task_available", "source": "task_kick"})
         return {"ok": True}
 
+    @app.post("/api/extension/reload")
+    async def extension_reload() -> dict[str, Any]:
+        """Dev-only: broadcast `extension_reload` so the connected
+        service-worker calls chrome.runtime.reload() — picks up the
+        latest /dist bundle without the user clicking the reload icon
+        in chrome://extensions.
+
+        Best-effort — silent when no event-hub is wired."""
+        publish = getattr(getattr(ctx, "event_hub", None), "publish", None)
+        if callable(publish):
+            with suppress(Exception):
+                await publish({"type": "extension_reload", "source": "dev"})
+        return {"ok": True}
+
     # ── Configuration management endpoints ──────────────────────────
 
     def _config_to_response(

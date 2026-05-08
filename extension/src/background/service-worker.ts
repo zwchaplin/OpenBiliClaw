@@ -179,6 +179,21 @@ function handleRuntimeEvent(event: Record<string, unknown>): void {
     return;
   }
 
+  // Dev-only: lets `curl -X POST /api/extension/reload` (or the
+  // openbiliclaw extension-reload CLI shim) reload the entire
+  // extension after a build, so the user doesn't have to click the
+  // reload icon in chrome://extensions every iteration.
+  // chrome.runtime.reload() is the MV3 native API for this; no
+  // permission needed.
+  if (eventType === "extension_reload") {
+    if (chrome?.runtime?.reload) {
+      // eslint-disable-next-line no-console
+      console.debug("[OpenBiliClaw] runtime-stream → chrome.runtime.reload()");
+      chrome.runtime.reload();
+    }
+    return;
+  }
+
   // v0.3.16+: OS-level Chrome toasts are disabled by user request.
   // Both interest.probe and delight.candidate surface inside the
   // popup via its own runtime-stream WS handler — no chrome
