@@ -54,6 +54,16 @@ _QUERIES_SYSTEM_PROMPT = """\
 """
 
 
+def _extract_llm_json_payload(raw: object) -> object:
+    """Return a JSON-like payload from either raw provider JSON or LLMResponse."""
+    content = getattr(raw, "content", None)
+    if isinstance(content, str):
+        raw = content
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # YoutubeSearchStrategy
 # ---------------------------------------------------------------------------
@@ -128,7 +138,7 @@ class YoutubeSearchStrategy(DiscoveryStrategy):
                 max_tokens=512,
                 caller="yt_search.generate_queries",
             )
-            parsed = json.loads(str(raw)) if isinstance(raw, str) else raw
+            parsed = _extract_llm_json_payload(raw)
             if isinstance(parsed, dict):
                 queries = parsed.get("queries") or []
                 return [str(q).strip() for q in queries if str(q).strip()][: self.queries_per_run]
@@ -308,10 +318,10 @@ class YoutubeChannelStrategy(DiscoveryStrategy):
         return results
 
     def _subscribed_channel_ids(self) -> list[str]:
-        """Read YouTube channel IDs from stored follow events."""
+        """Read YouTube channel references from stored follow events."""
         import json as _json
 
-        channel_ids: list[str] = []
+        channel_refs: list[str] = []
         seen: set[str] = set()
         try:
             events = self.memory.query_events(event_types=["follow"], limit=500)
@@ -330,11 +340,15 @@ class YoutubeChannelStrategy(DiscoveryStrategy):
                 continue
             if str(meta.get("source_platform", "")) != "youtube":
                 continue
-            cid = str(meta.get("channel_id", "")).strip()
-            if cid and cid not in seen:
-                seen.add(cid)
-                channel_ids.append(cid)
-                if len(channel_ids) >= self.max_channels:
+            channel_ref = (
+                str(meta.get("channel_id", "")).strip()
+                or str(meta.get("channel_url", "")).strip()
+                or str(ev.get("url", "")).strip()
+            )
+            if channel_ref and channel_ref not in seen:
+                seen.add(channel_ref)
+                channel_refs.append(channel_ref)
+                if len(channel_refs) >= self.max_channels:
                     break
 
-        return channel_ids
+        return channel_refs

@@ -2,10 +2,11 @@
 
 ## 概述
 
-YouTube 模块负责把用户在 YouTube 上的长期兴趣信号接入 OpenBiliClaw 画像链路。当前有两条入口：
+YouTube 模块负责把用户在 YouTube 上的长期兴趣信号接入 OpenBiliClaw 画像链路，并在 discovery 阶段把 YouTube 视频作为候选供给。当前有三类入口：
 
 - 浏览器扩展任务桥：`openbiliclaw init --yes-youtube` / `fetch-youtube` 入队 `yt_tasks(type="bootstrap_profile")`，扩展在已登录 YouTube 会话中读取观看历史、订阅和点赞。
 - Google Takeout 离线导入：`openbiliclaw import-youtube <path>` 解析 `.zip` 或解压目录，把历史数据转换为统一事件。
+- discovery 策略：`yt_search` / `yt_trending` / `yt_channel` 使用真实 YouTube 抓取结果进入 LLM 打分过滤，产出 `source_platform="youtube"` 的 `DiscoveredContent`。
 
 ## 已实现功能
 
@@ -17,12 +18,17 @@ YouTube 模块负责把用户在 YouTube 上的长期兴趣信号接入 OpenBili
 | 单源 smoke | ✅ | `fetch-youtube` 独立验证扩展、登录态和后端任务桥，不隐式重建画像 |
 | Takeout 导入 | ✅ | `import-youtube` 支持 Google Takeout `.zip` 或目录，JSON / HTML watch history、subscriptions CSV、liked videos CSV |
 | 统一事件转换 | ✅ | `yt_history -> view`、`yt_subscriptions -> follow`、`yt_likes -> like`，全部携带 `metadata.source_platform="youtube"` |
+| `yt_search` discovery | ✅ | LLM 从真实画像生成 YouTube 搜索关键词，`scrapetube` 拉搜索结果，再进入 LLM 相关性打分 |
+| `yt_trending` discovery | ✅ | 通过 YouTube InnerTube browse API 拉 trending feed；YouTube 当前端点返回 400 或网络不可用时返回空结果，不中断整轮 discovery |
+| `yt_channel` discovery | ✅ | 从 DB 读取 `event_type=follow` 且 `metadata.source_platform="youtube"` 的订阅频道，优先 `scrapetube`，频道 handle URL 走 `yt-dlp` fallback 拉最新视频 |
 
 ## 公开 API
 
 ```python
 from openbiliclaw.sources.yt_tasks import YtTaskQueue, yt_bootstrap_items_to_events
 from openbiliclaw.youtube.takeout import parse_takeout
+from openbiliclaw.discovery.strategies.youtube import YoutubeSearchStrategy
+from openbiliclaw.youtube.client import YtScraperClient
 
 queue = YtTaskQueue(database)
 task_id = queue.enqueue_with_id(
@@ -47,6 +53,11 @@ events = yt_bootstrap_items_to_events(
 )
 
 takeout = parse_takeout("~/Downloads/takeout.zip")
+
+yt_search = YoutubeSearchStrategy(
+    client=YtScraperClient(),
+    llm_service=llm_service,
+)
 ```
 
 CLI/API 入口：
@@ -82,3 +93,4 @@ openbiliclaw import-youtube ~/Downloads/takeout.zip --dry-run
 - `OPENBILICLAW_NO_YOUTUBE=1` 优先级高于 `--yes-youtube`。环境变量用于机器级永久 opt-out，必须能覆盖脚本参数。
 - YouTube 任务在抖音任务完成后才入队。两者都会打开前台 tab，串行执行能避免页面懒加载和焦点状态互相干扰。
 - Takeout 导入和扩展导入都走统一事件格式。下游 `analyze_events()`、`build_initial_profile()` 和 memory 层不需要理解 YouTube 原始文件或 DOM schema。
+- discovery 输出统一使用 `source_platform="youtube"` 和 `content_id=<YouTube video id>`。`ContentDiscoveryEngine` 必须按跨源 content identity 去重和缓存，不能只按 B 站 `bvid`，否则多个 YouTube 候选会被空 `bvid` 合并成一条。

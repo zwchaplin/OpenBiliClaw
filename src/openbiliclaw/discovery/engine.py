@@ -773,8 +773,8 @@ class ContentDiscoveryEngine:
         if self._llm_service is None:
             return 0.0
 
-        # Check eval cache (same bvid in same profile → same score)
-        cache_key = f"{content.bvid}:{id(profile)}"
+        # Check eval cache (same content identity in same profile → same score)
+        cache_key = f"{self._content_identity(content)}:{id(profile)}"
         cached = self._eval_cache.get(cache_key)
         if cached is not None:
             score, reason, topic_group, style_key, franchise_key = cached
@@ -940,7 +940,7 @@ class ContentDiscoveryEngine:
         uncached_indices: list[int] = []
         scores: list[float] = [0.0] * len(contents)
         for i, content in enumerate(contents):
-            cache_key = f"{content.bvid}:{id(profile)}"
+            cache_key = f"{self._content_identity(content)}:{id(profile)}"
             cached = self._eval_cache.get(cache_key)
             if cached is not None:
                 # Cache tuple grew in v0.3.18 to carry franchise_key.
@@ -1154,7 +1154,7 @@ class ContentDiscoveryEngine:
             if franchise_key:
                 content.franchise_key = franchise_key
 
-            cache_key = f"{content.bvid}:{id(profile)}"
+            cache_key = f"{self._content_identity(content)}:{id(profile)}"
             self._eval_cache[cache_key] = (
                 score,
                 reason,
@@ -1254,12 +1254,21 @@ class ContentDiscoveryEngine:
 
     @staticmethod
     def _merge_duplicates(results: list[DiscoveredContent]) -> list[DiscoveredContent]:
-        by_bvid: dict[str, DiscoveredContent] = {}
+        by_identity: dict[str, DiscoveredContent] = {}
         for item in results:
-            existing = by_bvid.get(item.bvid)
+            identity = ContentDiscoveryEngine._content_identity(item)
+            existing = by_identity.get(identity)
             if existing is None or item.relevance_score > existing.relevance_score:
-                by_bvid[item.bvid] = item
-        return list(by_bvid.values())
+                by_identity[identity] = item
+        return list(by_identity.values())
+
+    @staticmethod
+    def _content_identity(item: DiscoveredContent) -> str:
+        platform = (item.source_platform or "bilibili").strip() or "bilibili"
+        content_id = (item.content_id or item.bvid or item.content_url).strip()
+        if content_id:
+            return f"{platform}:{content_id}"
+        return f"{platform}:title:{item.title}:{item.author_name or item.up_name}"
 
     async def _run_strategies(
         self,
@@ -1684,9 +1693,9 @@ class ContentDiscoveryEngine:
 
         # Combine reserved + selected
         combined = list(reserved)
-        reserved_bvids = {item.bvid for item in reserved}
+        reserved_keys = {ContentDiscoveryEngine._content_identity(item) for item in reserved}
         for item in selected:
-            if item.bvid not in reserved_bvids:
+            if ContentDiscoveryEngine._content_identity(item) not in reserved_keys:
                 combined.append(item)
         if len(combined) >= limit:
             return combined[:limit]
@@ -1725,7 +1734,7 @@ class ContentDiscoveryEngine:
                 source_buckets[source].append(item)
 
         reserved: list[DiscoveredContent] = []
-        reserved_bvids: set[str] = set()
+        reserved_keys: set[str] = set()
         # Track topics across ALL sources to avoid reserving duplicate topics
         global_seen_topics: set[str] = set()
         source_counts: dict[str, int] = {s: 0 for s in unique_sources}
@@ -1741,12 +1750,16 @@ class ContentDiscoveryEngine:
             if topic and topic in global_seen_topics:
                 continue
             reserved.append(item)
-            reserved_bvids.add(item.bvid)
+            reserved_keys.add(ContentDiscoveryEngine._content_identity(item))
             source_counts[source] += 1
             if topic:
                 global_seen_topics.add(topic)
 
-        unreserved = [item for item in results if item.bvid not in reserved_bvids]
+        unreserved = [
+            item
+            for item in results
+            if ContentDiscoveryEngine._content_identity(item) not in reserved_keys
+        ]
         return reserved, unreserved
 
     @staticmethod
@@ -1983,7 +1996,7 @@ class ContentDiscoveryEngine:
                     skipped_franchise[franchise_key] = skipped_franchise.get(franchise_key, 0) + 1
                     continue
             try:
-                self._database.cache_content(item.bvid, **item.to_cache_kwargs())
+                self._database.cache_content(item.bvid or item.content_id, **item.to_cache_kwargs())
                 persisted.append(item)
                 if franchise_key:
                     round_franchise_counts[franchise_key] = (

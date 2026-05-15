@@ -36,13 +36,22 @@ _DEFAULT_REGION = "US"
 
 # InnerTube client config for anonymous web requests
 _INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+_INNERTUBE_CLIENT_VERSION = "2.20240101.00.00"
 _INNERTUBE_CONTEXT = {
     "client": {
         "clientName": "WEB",
-        "clientVersion": "2.20240101.00.00",
+        "clientVersion": _INNERTUBE_CLIENT_VERSION,
         "hl": "en",
     }
 }
+
+
+@dataclass(frozen=True)
+class InnerTubeConfig:
+    api_key: str = _INNERTUBE_KEY
+    client_version: str = _INNERTUBE_CLIENT_VERSION
+    client_name: str = "WEB"
+    client_name_header: str = "1"
 
 
 # ---------------------------------------------------------------------------
@@ -65,16 +74,75 @@ def _scrapetube_channel(channel_id: str, limit: int) -> list[dict[str, Any]]:
         import scrapetube
 
         if channel_id.startswith("@") or channel_id.startswith("UC"):
-            return [
+            results = [
                 dict(v)
                 for v in scrapetube.get_channel(
                     channel_url=None, channel_id=channel_id, limit=limit
                 )
             ]
-        return [dict(v) for v in scrapetube.get_channel(channel_url=channel_id, limit=limit)]
+        else:
+            results = [
+                dict(v) for v in scrapetube.get_channel(channel_url=channel_id, limit=limit)
+            ]
+        if results:
+            return results
     except Exception as exc:
         logger.warning("scrapetube.channel(%r) failed: %s", channel_id, exc)
+    return _ytdlp_channel(channel_id, limit)
+
+
+def _ytdlp_channel(channel_ref: str, limit: int) -> list[dict[str, Any]]:
+    """Fetch channel uploads with yt-dlp when scrapetube cannot resolve handles."""
+    url = _channel_uploads_url(channel_ref)
+    if not url:
         return []
+    try:
+        from yt_dlp import YoutubeDL  # type: ignore[import-untyped]
+
+        options = {
+            "quiet": True,
+            "extract_flat": True,
+            "skip_download": True,
+            "playlistend": limit,
+            "noplaylist": False,
+            "ignoreerrors": True,
+            "socket_timeout": 20,
+        }
+        with YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if not isinstance(info, dict):
+            return []
+        entries = info.get("entries")
+        if not isinstance(entries, list):
+            return []
+        results: list[dict[str, Any]] = []
+        for entry in entries[:limit]:
+            if not isinstance(entry, dict):
+                continue
+            item = dict(entry)
+            if not item.get("videoId") and item.get("id"):
+                item["videoId"] = item["id"]
+            if not item.get("channel") and info.get("channel"):
+                item["channel"] = info.get("channel")
+            results.append(item)
+        return results
+    except Exception as exc:
+        logger.warning("yt-dlp.channel(%r) failed: %s", channel_ref, exc)
+        return []
+
+
+def _channel_uploads_url(channel_ref: str) -> str:
+    ref = channel_ref.strip()
+    if not ref:
+        return ""
+    if ref.startswith("http://") or ref.startswith("https://"):
+        base = ref.rstrip("/")
+        return base if base.endswith("/videos") else f"{base}/videos"
+    if ref.startswith("@"):
+        return f"https://www.youtube.com/{ref}/videos"
+    if ref.startswith("UC"):
+        return f"https://www.youtube.com/channel/{ref}/videos"
+    return ""
 
 
 def _innertube_trending(region_code: str, limit: int) -> list[dict[str, Any]]:
@@ -84,6 +152,7 @@ def _innertube_trending(region_code: str, limit: int) -> list[dict[str, Any]]:
     Returns a flat list of video dicts ready for normalize_yt_video().
     """
     try:
+        config = _fetch_innertube_config(region_code)
         payload = json.dumps(
             {
                 "browseId": "FEtrending",
@@ -91,6 +160,8 @@ def _innertube_trending(region_code: str, limit: int) -> list[dict[str, Any]]:
                     **_INNERTUBE_CONTEXT,
                     "client": {
                         **_INNERTUBE_CONTEXT["client"],
+                        "clientName": config.client_name,
+                        "clientVersion": config.client_version,
                         "gl": region_code,
                     },
                 },
@@ -98,7 +169,7 @@ def _innertube_trending(region_code: str, limit: int) -> list[dict[str, Any]]:
             ensure_ascii=False,
         ).encode()
 
-        url = f"https://www.youtube.com/youtubei/v1/browse?key={_INNERTUBE_KEY}"
+        url = f"https://www.youtube.com/youtubei/v1/browse?key={config.api_key}"
         req = urllib_request.Request(
             url,
             data=payload,
@@ -109,8 +180,8 @@ def _innertube_trending(region_code: str, limit: int) -> list[dict[str, Any]]:
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/120.0.0.0 Safari/537.36"
                 ),
-                "X-YouTube-Client-Name": "1",
-                "X-YouTube-Client-Version": "2.20240101.00.00",
+                "X-YouTube-Client-Name": config.client_name_header,
+                "X-YouTube-Client-Version": config.client_version,
             },
             method="POST",
         )
@@ -121,6 +192,53 @@ def _innertube_trending(region_code: str, limit: int) -> list[dict[str, Any]]:
     except Exception as exc:
         logger.warning("InnerTube trending(%s) failed: %s", region_code, exc)
         return []
+
+
+def _fetch_innertube_config(region_code: str) -> InnerTubeConfig:
+    """Read the current web client config from YouTube's trending page."""
+    try:
+        url = f"https://www.youtube.com/feed/trending?gl={region_code}"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        with urllib_request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", "ignore")
+        return _extract_innertube_config(html)
+    except Exception as exc:
+        logger.debug("Failed to read YouTube InnerTube config; using fallback: %s", exc)
+        return InnerTubeConfig()
+
+
+def _extract_innertube_config(html: str) -> InnerTubeConfig:
+    """Extract InnerTube config constants from a YouTube HTML response."""
+    api_key = _extract_js_string(html, "INNERTUBE_API_KEY") or _INNERTUBE_KEY
+    client_version = (
+        _extract_js_string(html, "INNERTUBE_CLIENT_VERSION") or _INNERTUBE_CLIENT_VERSION
+    )
+    client_name_header = _extract_js_number(html, "INNERTUBE_CONTEXT_CLIENT_NAME") or "1"
+    return InnerTubeConfig(
+        api_key=api_key,
+        client_version=client_version,
+        client_name_header=client_name_header,
+    )
+
+
+def _extract_js_string(html: str, key: str) -> str:
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]+)"', html)
+    return match.group(1) if match else ""
+
+
+def _extract_js_number(html: str, key: str) -> str:
+    match = re.search(rf'"{re.escape(key)}"\s*:\s*(\d+)', html)
+    return match.group(1) if match else ""
 
 
 def _extract_innertube_videos(

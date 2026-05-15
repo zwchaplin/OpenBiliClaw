@@ -1177,6 +1177,32 @@ async def test_discovery_engine_cache_results_preserves_multi_source_fields() ->
         assert row["content_url"].endswith("/6613e9ac000000001a015e65")
 
 
+def test_merge_duplicates_uses_multi_source_content_identity() -> None:
+    first = DiscoveredContent(
+        content_id="yt-a",
+        source_platform="youtube",
+        title="YouTube A",
+        relevance_score=0.6,
+    )
+    second = DiscoveredContent(
+        content_id="yt-b",
+        source_platform="youtube",
+        title="YouTube B",
+        relevance_score=0.5,
+    )
+    duplicate = DiscoveredContent(
+        content_id="yt-a",
+        source_platform="youtube",
+        title="YouTube A better",
+        relevance_score=0.9,
+    )
+
+    merged = ContentDiscoveryEngine._merge_duplicates([first, second, duplicate])
+
+    assert [item.content_id for item in merged] == ["yt-a", "yt-b"]
+    assert merged[0].title == "YouTube A better"
+
+
 @pytest.mark.asyncio
 async def test_discovery_engine_cache_results_preserves_relevance_fields() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
