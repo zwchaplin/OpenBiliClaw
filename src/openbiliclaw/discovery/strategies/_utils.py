@@ -195,6 +195,7 @@ def build_profile_summary(profile: SoulProfile) -> dict[str, object]:
             for interest in profile.preferences.interests[:10]
         ],
         "favorite_up_users": profile.preferences.favorite_up_users[:5],
+        "disliked_topics": profile.preferences.disliked_topics[:8],
         "deep_needs": profile.deep_needs[:5],
         "style": {
             "preferred_duration": profile.preferences.style.preferred_duration,

@@ -178,6 +178,27 @@ async def test_search_strategy_passes_style_preferences_to_query_prompt() -> Non
 
 
 @pytest.mark.asyncio
+async def test_search_strategy_passes_disliked_topics_to_query_prompt() -> None:
+    from openbiliclaw.discovery.strategies.strategies import SearchStrategy
+
+    llm_service = FakeLLMService('{"queries": ["摄影 vlog"]}')
+    profile = _build_profile()
+    profile.preferences.disliked_topics = ["标题党", "低质混剪"]
+    strategy = SearchStrategy(
+        llm_service=llm_service,
+        bilibili_client=FakeBilibiliClient({}),
+        llm_evaluation=False,
+    )
+
+    await strategy._generate_queries(profile)
+
+    user_input = str(llm_service.calls[0]["user_input"])
+    assert '"disliked_topics": [' in user_input
+    assert "标题党" in user_input
+    assert "低质混剪" in user_input
+
+
+@pytest.mark.asyncio
 async def test_search_strategy_passes_pool_snapshot_to_query_prompt() -> None:
     from openbiliclaw.discovery.strategies.strategies import SearchStrategy
 

@@ -158,6 +158,31 @@ async def test_evaluate_content_passes_style_preferences_to_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_evaluate_content_passes_disliked_topics_to_prompt() -> None:
+    llm_service = FakeLLMService(
+        '{"score": 0.52, "reason": "命中避雷", "topic_group": "混剪", "style_key": "light_chat"}'
+    )
+    engine = ContentDiscoveryEngine(llm_service=llm_service)
+    profile = _build_profile()
+    profile.preferences.disliked_topics = ["标题党", "低质混剪"]
+
+    await engine.evaluate_content(
+        DiscoveredContent(
+            bvid="BV1DISLIKE",
+            title="震惊体低质混剪",
+            description="标题党式盘点",
+            source_strategy="search",
+        ),
+        profile,
+    )
+
+    user_input = str(llm_service.calls[0]["user_input"])
+    assert '"disliked_topics": [' in user_input
+    assert "标题党" in user_input
+    assert "低质混剪" in user_input
+
+
+@pytest.mark.asyncio
 async def test_discovery_engine_handles_empty_strategy_results() -> None:
     from openbiliclaw.discovery.strategies.strategies import SearchStrategy
 
