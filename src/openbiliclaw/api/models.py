@@ -15,6 +15,12 @@ class BehaviorEventIn(BaseModel):
     source_platform: str = "bilibili"
     context: dict[str, object] = Field(default_factory=dict)
     metadata: dict[str, object] = Field(default_factory=dict)
+    # v0.3.x event-satisfaction signal: dwell on video-page exit. Either
+    # top-level or `metadata.watch_seconds` is accepted; the endpoint
+    # folds top-level into metadata before persistence so the storage
+    # classifier reads from a single canonical location.
+    watch_seconds: float | None = None
+    video_duration_seconds: float | None = None
 
 
 class BehaviorEventBatchIn(BaseModel):
@@ -434,6 +440,12 @@ class RecommendationClickIn(BaseModel):
     title: str = ""
     topic_label: str = ""
     up_name: str = ""
+    # v0.3.x event-satisfaction signal: optional dwell on the
+    # recommendation click-through. When present, these flow into the
+    # persisted click event's metadata so storage classification can
+    # tell meaningful_dwell vs quick_exit on recommended content.
+    watch_seconds: float | None = None
+    video_duration_seconds: float | None = None
 
 
 class RecommendationClickResponse(BaseModel):

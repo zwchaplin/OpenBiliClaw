@@ -1000,6 +1000,14 @@ def create_app(
             }
             if not isinstance(raw_context, str) and raw_context:
                 metadata.setdefault("raw_context", raw_context)
+            # v0.3.x event-satisfaction: fold top-level dwell into
+            # metadata so the storage classifier sees them in one place.
+            # `setdefault` preserves an explicit metadata.watch_seconds
+            # the extension might already have set inside metadata.
+            if item.watch_seconds is not None:
+                metadata.setdefault("watch_seconds", item.watch_seconds)
+            if item.video_duration_seconds is not None:
+                metadata.setdefault("video_duration_seconds", item.video_duration_seconds)
             event = build_event(
                 event_type=item.type,
                 source_platform=source_platform,
@@ -2273,6 +2281,22 @@ def create_app(
         click_context = f"在 B 站点开了《{title}》"
         if click_extra_parts:
             click_context = f"{click_context}({','.join(click_extra_parts)})"
+        click_metadata: dict[str, object] = {
+            "recommendation_id": payload.recommendation_id,
+            "bvid": bvid,
+            "topic_label": topic_label,
+            "up_name": up_name,
+            "source": "recommendation_click",
+        }
+        # v0.3.x event-satisfaction: forward dwell so the persisted
+        # click row can be classified as meaningful_dwell vs quick_exit.
+        # Absent fields stay absent; storage classifier degrades to
+        # unknown / missing_dwell. Storage is the single classification
+        # owner — do not classify here.
+        if payload.watch_seconds is not None:
+            click_metadata["watch_seconds"] = payload.watch_seconds
+        if payload.video_duration_seconds is not None:
+            click_metadata["video_duration_seconds"] = payload.video_duration_seconds
         with suppress(Exception):
             await ctx.memory_manager.propagate_event(
                 build_event(
@@ -2282,13 +2306,7 @@ def create_app(
                     url=f"https://www.bilibili.com/video/{bvid}" if bvid else "",
                     author=up_name,
                     context=click_context,
-                    metadata={
-                        "recommendation_id": payload.recommendation_id,
-                        "bvid": bvid,
-                        "topic_label": topic_label,
-                        "up_name": up_name,
-                        "source": "recommendation_click",
-                    },
+                    metadata=click_metadata,
                 )
             )
 

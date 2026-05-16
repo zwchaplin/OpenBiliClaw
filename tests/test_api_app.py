@@ -708,6 +708,79 @@ class TestBackendAPI:
         # Blank source_platform (whitespace only) falls back to bilibili.
         assert memory.events[1]["metadata"]["source_platform"] == "bilibili"
 
+    def test_events_endpoint_preserves_top_level_dwell_fields(self) -> None:
+        """v0.3.x event-satisfaction: top-level watch_seconds /
+        video_duration_seconds get folded into metadata so the storage
+        classifier sees them."""
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            async def propagate_event(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+        memory = FakeMemoryManager()
+        app = create_app(memory_manager=memory)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/events",
+            json={
+                "events": [
+                    {
+                        "type": "click",
+                        "url": "https://www.bilibili.com/video/BVquick",
+                        "title": "标题党",
+                        "timestamp": 1710000000000,
+                        "watch_seconds": 2,
+                        "video_duration_seconds": 120,
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        ev = memory.events[0]
+        assert ev["metadata"]["watch_seconds"] == 2
+        assert ev["metadata"]["video_duration_seconds"] == 120
+
+    def test_events_endpoint_preserves_metadata_dwell_fields(self) -> None:
+        """Same fields also accepted when the extension nests them in metadata."""
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            async def propagate_event(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+        memory = FakeMemoryManager()
+        app = create_app(memory_manager=memory)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/events",
+            json={
+                "events": [
+                    {
+                        "type": "click",
+                        "url": "https://www.bilibili.com/video/BVdeep",
+                        "title": "深度教程",
+                        "timestamp": 1710000000000,
+                        "metadata": {"watch_seconds": 600, "video_duration_seconds": 700},
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200
+        ev = memory.events[0]
+        assert ev["metadata"]["watch_seconds"] == 600
+        assert ev["metadata"]["video_duration_seconds"] == 700
+
     def test_events_endpoint_handles_extension_cors_preflight(self) -> None:
         from fastapi.testclient import TestClient
 
@@ -2192,6 +2265,109 @@ class TestBackendAPI:
         assert ingested_signal.payload["title"] == "深入理解Transformer"
         assert ingested_signal.payload["topic_label"] == "AI技术"
         assert ingested_signal.payload["up_name"] == "ML教程君"
+
+    def test_recommendation_click_endpoint_persists_dwell_fields(self) -> None:
+        """When the extension reports dwell on the click-through, those
+        fields flow into the persisted click event so storage can classify
+        the recommendation outcome (meaningful_dwell vs quick_exit)."""
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            async def propagate_event(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+        class FakeDatabase:
+            def get_recommendation_by_id(
+                self, recommendation_id: int,
+            ) -> dict[str, object] | None:
+                return None
+
+        class StubPipeline:
+            async def ingest(self, signal: object) -> object:
+                from openbiliclaw.soul.pipeline import IngestResult
+
+                return IngestResult(signals_accepted=1, layers_buffered=[], layers_updated=[])
+
+        class FakeSoulEngine:
+            def __init__(self) -> None:
+                self.pipeline = StubPipeline()
+
+        memory = FakeMemoryManager()
+        app = create_app(
+            memory_manager=memory,
+            database=FakeDatabase(),
+            soul_engine=FakeSoulEngine(),
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/recommendation-click",
+            json={
+                "bvid": "BVdwell",
+                "title": "深度教程",
+                "watch_seconds": 600,
+                "video_duration_seconds": 700,
+            },
+        )
+
+        assert response.status_code == 200
+        assert memory.events, "click should be persisted"
+        ev = memory.events[0]
+        assert ev["event_type"] == "click"
+        assert ev["metadata"]["watch_seconds"] == 600
+        assert ev["metadata"]["video_duration_seconds"] == 700
+        assert ev["metadata"]["source"] == "recommendation_click"
+
+    def test_recommendation_click_endpoint_persists_without_dwell_fields(self) -> None:
+        """No dwell fields supplied → click still persists (storage will
+        classify it as unknown / missing_dwell, but the endpoint must
+        not require the fields)."""
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.events: list[dict[str, object]] = []
+
+            async def propagate_event(self, event: dict[str, object]) -> None:
+                self.events.append(event)
+
+        class FakeDatabase:
+            def get_recommendation_by_id(
+                self, recommendation_id: int,
+            ) -> dict[str, object] | None:
+                return None
+
+        class StubPipeline:
+            async def ingest(self, signal: object) -> object:
+                from openbiliclaw.soul.pipeline import IngestResult
+
+                return IngestResult(signals_accepted=1, layers_buffered=[], layers_updated=[])
+
+        class FakeSoulEngine:
+            def __init__(self) -> None:
+                self.pipeline = StubPipeline()
+
+        memory = FakeMemoryManager()
+        app = create_app(
+            memory_manager=memory,
+            database=FakeDatabase(),
+            soul_engine=FakeSoulEngine(),
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/recommendation-click",
+            json={"bvid": "BVnoDwell", "title": "未知"},
+        )
+
+        assert response.status_code == 200
+        assert memory.events, "click should still persist without dwell"
+        ev = memory.events[0]
+        assert "watch_seconds" not in ev["metadata"]
+        assert "video_duration_seconds" not in ev["metadata"]
 
     def test_recommendation_click_endpoint_accepts_bvid_without_db_lookup(self) -> None:
         """When no recommendation_id is supplied, use the bvid from the payload directly."""
