@@ -15,6 +15,7 @@
 - 浏览器插件版本提升到 v0.3.23，避免复用已发布的 `extension-v0.3.22` tag / release 资产语义。
 - README / README_EN 顶部 highlights callout 收敛为“只保留最新版本、≤4 条、≤1 句、CN/EN 同步”，完整历史继续放在 changelog，避免 README 顶部堆成迷你变更日志。
 - README 增加用户交流群二维码入口，放在贡献入口前，避免打断首次安装路径。
+- README / README_EN 底部“更新日志 / Release History”从长版本表收敛为最新版本入口 + 完整 changelog / Releases 链接，避免 README 主体被历史记录撑长。
 
 ---
 
