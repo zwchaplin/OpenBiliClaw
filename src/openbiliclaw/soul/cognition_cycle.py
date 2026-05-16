@@ -19,12 +19,15 @@ cost-aware throttle so LLM spend stays bounded.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from openbiliclaw.soul.awareness_analyzer import AwarenessGenerationError
 
 if TYPE_CHECKING:
     from openbiliclaw.memory.manager import MemoryManager
@@ -51,6 +54,12 @@ _AWARENESS_EVENT_LIMIT = 50
 # How many notes/insights to keep attached to the OnionProfile (surfaced in UI).
 _PROFILE_AWARENESS_WINDOW = 8
 _PROFILE_INSIGHT_WINDOW = 6
+
+# Backoff between the first and second awareness attempt. MiMo 502s and
+# transient JSON-shape glitches typically clear on a re-call after a brief
+# pause; 2s is enough to dodge most retryable bursts without lengthening
+# the cycle noticeably.
+_AWARENESS_RETRY_BACKOFF_SECONDS = 2.0
 
 
 @dataclass
@@ -135,6 +144,18 @@ class CognitionCycle:
                 added = await self._run_awareness()
                 result.awareness_generated = added
                 state["last_awareness_at"] = current_time.isoformat()
+            except AwarenessGenerationError as exc:
+                # Recoverable: bad JSON shape or single LLM hiccup. Log at
+                # WARNING (not ERROR) and DO NOT advance ``last_awareness_at``
+                # — the next tick will re-attempt instead of waiting the full
+                # 12h throttle. Pre-resilience this fell through the generic
+                # ``except Exception`` branch which silently advanced the
+                # schedule and blanked the awareness window for half a day.
+                logger.warning(
+                    "Awareness analyzer failed twice; will retry next tick: %s",
+                    exc,
+                )
+                result.errors.append(f"awareness: {exc}")
             except Exception as exc:
                 logger.exception("Awareness analyzer failed during cognition cycle")
                 result.errors.append(f"awareness: {exc}")
@@ -176,16 +197,30 @@ class CognitionCycle:
         """Run the awareness analyzer and persist the merged result.
 
         Returns the number of NEW notes added (0 if LLM returned nothing new).
+
+        Wraps the analyzer call in a single retry on
+        ``AwarenessGenerationError`` (one attempt plus one retry after a
+        2s pause). MiMo 502s and transient JSON-shape glitches usually
+        clear on the second call; persistent failures bubble up to
+        ``run_if_due`` which handles them without advancing the schedule.
         """
         events = self._memory.query_events(limit=_AWARENESS_EVENT_LIMIT)
         preference = self._memory.get_layer("preference").data
         soul_profile_data = self._memory.get_layer("soul").data
 
-        new_notes = await self._awareness_analyzer.analyze(
-            events=events,
-            preference=preference,
-            soul_profile=soul_profile_data,
-        )
+        try:
+            new_notes = await self._awareness_analyzer.analyze(
+                events=events,
+                preference=preference,
+                soul_profile=soul_profile_data,
+            )
+        except AwarenessGenerationError:
+            await asyncio.sleep(_AWARENESS_RETRY_BACKOFF_SECONDS)
+            new_notes = await self._awareness_analyzer.analyze(
+                events=events,
+                preference=preference,
+                soul_profile=soul_profile_data,
+            )
         if not new_notes:
             return 0
 
