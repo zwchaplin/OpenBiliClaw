@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from openbiliclaw.llm.prompts import (
+    _AWARENESS_SYSTEM_PROMPT,
     build_awareness_prompt,
     build_batch_content_evaluation_prompt,
     build_explore_domains_prompt,
@@ -214,6 +215,62 @@ def test_awareness_prompt_orders_stable_context_before_recent_events() -> None:
 
     assert user_prompt.index("<soul_profile>") < user_prompt.index("<preference_summary>")
     assert user_prompt.index("<preference_summary>") < user_prompt.index("<recent_events>")
+
+
+def test_build_awareness_prompt_system_message_equals_constant() -> None:
+    """The system message is the literal _AWARENESS_SYSTEM_PROMPT — no
+    interpolation, no concatenation. Required for provider-side prompt
+    cache to fire on the awareness call."""
+    messages = build_awareness_prompt(
+        events=[{"event_type": "view", "title": "X"}],
+        preference_summary={"a": 1},
+        soul_profile={"x": 1},
+    )
+
+    assert messages[0]["content"] == _AWARENESS_SYSTEM_PROMPT
+
+
+def test_build_awareness_prompt_user_block_ends_with_recent_events() -> None:
+    """Recent events is the most-variable block and must be the suffix.
+    Anything stable after it would shrink the cache prefix on every call."""
+    messages = build_awareness_prompt(
+        events=[{"event_type": "view", "title": "本次最新事件"}],
+        preference_summary={"interests": ["长期偏好"]},
+        soul_profile={"core_traits": ["稳定画像"]},
+    )
+
+    user_prompt = messages[1]["content"]
+
+    assert user_prompt.rstrip().endswith("</recent_events>")
+
+
+def test_build_awareness_prompt_serialization_is_deterministic() -> None:
+    """Differently-ordered dict keys with identical semantic payloads must
+    yield byte-identical user messages. Validates sort_keys=True on the
+    profile, preference, and event-object json.dumps calls. Without this,
+    every call writes a new cache prefix and the awareness call loses
+    its ~36k-token cache hit."""
+    soul_profile_a = {"core_traits": ["稳定画像"], "values": ["求真"]}
+    soul_profile_b = {"values": ["求真"], "core_traits": ["稳定画像"]}
+
+    preference_a = {"interests": ["深度内容"], "disliked_topics": ["标题党"]}
+    preference_b = {"disliked_topics": ["标题党"], "interests": ["深度内容"]}
+
+    events_a = [{"event_type": "view", "title": "事件 A", "url": "https://a"}]
+    events_b = [{"title": "事件 A", "url": "https://a", "event_type": "view"}]
+
+    msg_a = build_awareness_prompt(
+        events=events_a,
+        preference_summary=preference_a,
+        soul_profile=soul_profile_a,
+    )
+    msg_b = build_awareness_prompt(
+        events=events_b,
+        preference_summary=preference_b,
+        soul_profile=soul_profile_b,
+    )
+
+    assert msg_a[1]["content"] == msg_b[1]["content"]
 
 
 def test_batch_content_evaluation_prompt_orders_profile_before_source_and_batch() -> None:
