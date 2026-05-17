@@ -2,23 +2,77 @@ import { normalizeRecommendation } from "./popup-helpers.js";
 import { getBackendBaseUrl } from "./popup-backend-config.js";
 
 export const CONFIG_CACHE_KEY = "openbiliclaw.config_cache";
+export const CONFIG_PUT_TIMEOUT_MS = 60_000;
 
-async function requestJson(path, options = {}) {
-  const backendUrl = await getBackendBaseUrl();
-  const response = await fetch(`${backendUrl}${path}`, options);
-  if (!response.ok) {
-    let details = null;
-    try {
-      details = await response.json();
-    } catch {
-      details = null;
-    }
-    const error = new Error(`${path} request failed: ${response.status}`);
-    error.status = response.status;
-    error.details = details;
-    throw error;
+function abortError(message = "Request aborted") {
+  if (typeof DOMException === "function") {
+    return new DOMException(message, "AbortError");
   }
-  return response.json();
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function withTimeout(signal, timeoutMs) {
+  const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  if (!hasTimeout && !signal) {
+    return { signal: undefined, cleanup: () => {} };
+  }
+  if (!hasTimeout) {
+    return { signal, cleanup: () => {} };
+  }
+
+  const controller = new AbortController();
+  let timeoutId = null;
+  const abortFrom = (reason) => {
+    if (!controller.signal.aborted) {
+      controller.abort(reason || abortError());
+    }
+  };
+  const onCallerAbort = () => abortFrom(signal?.reason);
+
+  if (signal?.aborted) {
+    abortFrom(signal.reason);
+  } else if (signal) {
+    signal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+  timeoutId = setTimeout(() => abortFrom(abortError("Request timed out")), timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener("abort", onCallerAbort);
+    },
+  };
+}
+
+export async function requestJson(path, options = {}) {
+  const backendUrl = await getBackendBaseUrl();
+  const { timeoutMs, signal, ...fetchOptions } = options;
+  const timeout = withTimeout(signal, timeoutMs);
+  const requestOptions = { ...fetchOptions };
+  if (timeout.signal) {
+    requestOptions.signal = timeout.signal;
+  }
+  try {
+    const response = await fetch(`${backendUrl}${path}`, requestOptions);
+    if (!response.ok) {
+      let details = null;
+      try {
+        details = await response.json();
+      } catch {
+        details = null;
+      }
+      const error = new Error(`${path} request failed: ${response.status}`);
+      error.status = response.status;
+      error.details = details;
+      throw error;
+    }
+    return response.json();
+  } finally {
+    timeout.cleanup();
+  }
 }
 
 function getChromeStorageLocal() {
@@ -319,6 +373,7 @@ export async function fetchSourceShareSuggestion(overrides = null) {
 export async function updateConfig(data) {
   return requestJson("/config", {
     method: "PUT",
+    timeoutMs: CONFIG_PUT_TIMEOUT_MS,
     headers: {
       "Content-Type": "application/json",
     },

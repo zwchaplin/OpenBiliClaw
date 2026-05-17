@@ -12,6 +12,7 @@ import {
   fetchProfileSummary,
   fetchSourceShareSuggestion,
   readCachedConfigSnapshot,
+  requestJson,
   reshuffleRecommendations,
   startChatTurn,
   updateConfig,
@@ -636,5 +637,97 @@ test("popup-api requests honor configured backend port from chrome.storage.local
   } finally {
     (globalThis as { chrome?: unknown }).chrome = originalChrome;
     __resetBackendEndpointForTests();
+  }
+});
+
+test("requestJson aborts fetch after timeoutMs", async () => {
+  globalThis.fetch = (async (_url: string, options: { signal?: AbortSignal }) => {
+    return new Promise((_resolve, reject) => {
+      if (!options.signal) {
+        setTimeout(() => reject(new Error("missing abort signal")), 100);
+        return;
+      }
+      options.signal.addEventListener("abort", () => {
+        reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      });
+    });
+  }) as unknown as typeof fetch;
+
+  await assert.rejects(
+    requestJson("/slow", { method: "GET", timeoutMs: 20 }),
+    (error: unknown) => error instanceof Error && error.name === "AbortError",
+  );
+});
+
+test("requestJson without timeout preserves no-signal fetch behavior", async () => {
+  const calls: Array<{ signal?: AbortSignal }> = [];
+  globalThis.fetch = (async (_url: string, options: { signal?: AbortSignal }) => {
+    calls.push(options);
+    return {
+      ok: true,
+      async json() {
+        return { ok: true };
+      },
+    };
+  }) as unknown as typeof fetch;
+
+  const result = await requestJson("/fast", { method: "GET" });
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].signal, undefined);
+});
+
+test("requestJson preserves caller abort reason before timeout fires", async () => {
+  const controller = new AbortController();
+  const reason = new DOMException("caller cancelled", "AbortError");
+  globalThis.fetch = (async (_url: string, options: { signal?: AbortSignal }) => {
+    return new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      });
+      queueMicrotask(() => controller.abort(reason));
+    });
+  }) as unknown as typeof fetch;
+
+  await assert.rejects(
+    requestJson("/caller-abort", {
+      method: "GET",
+      signal: controller.signal,
+      timeoutMs: 200,
+    }),
+    (error: unknown) => error === reason,
+  );
+});
+
+test("updateConfig uses the shared 60s config PUT timeout", async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const delays: number[] = [];
+  globalThis.setTimeout = ((callback: TimerHandler, delay?: number) => {
+    delays.push(Number(delay));
+    queueMicrotask(() => {
+      if (typeof callback === "function") callback();
+    });
+    return 1 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((_id?: unknown) => undefined) as typeof clearTimeout;
+  globalThis.fetch = (async (_url: string, options: { signal?: AbortSignal }) => {
+    return new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      });
+    });
+  }) as unknown as typeof fetch;
+
+  try {
+    await assert.rejects(
+      updateConfig({ language: "zh" }),
+      (error: unknown) => error instanceof Error && error.name === "AbortError",
+    );
+    assert.deepEqual(delays, [60_000]);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
   }
 });
