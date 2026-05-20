@@ -164,6 +164,8 @@ npm run build:firefox          # 产出 dist-firefox/
 
 AI 助手会克隆仓库、安装依赖、启动后端、做健康检查，并问几个有默认值的问题。看不懂就选默认；小红书、抖音和 YouTube 数据只有你明确同意才会进入初始画像。
 
+通过 `openbiliclaw start` 启动本地后端后，除了插件 side panel，你也可以在同端访问独立 Web UI：打开 `http://127.0.0.1:8420/web` 可用更大的浏览器页面查看推荐首页、画像、消息和设置；根路径 `/` 也会自动跳转到 `/web`。需要注意的是：**Web UI只是另一个更好的前端，后端仍依赖插件进行同步 Cookie等工作**。容器/API-only 入口 `openbiliclaw serve-api` 默认不托管 Web UI，如需同端口页面请显式加 `--with-web`。
+
 如果后端跑在局域网另一台机器上，用 `openbiliclaw start --host 0.0.0.0 --port 8420` 启动后端，并在插件设置页把「后端地址」改成那台机器的局域网 IP（例如 `192.168.1.100`）。
 
 ### 3. 在同一个浏览器登录内容平台

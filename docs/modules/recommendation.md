@@ -22,6 +22,8 @@
 | 候选排序统一 | ✅ | freshly discovered 与 cache backfill 现在共享同一套 tier / relevance / recency 排序口径 |
 | 9.1 反馈处理 | ✅ | CLI、本地 API 与插件 popup 已统一写回推荐反馈与 `feedback` 事件 |
 | 9.2 画像更新 | ✅ | 反馈累计到阈值后会自动触发偏好层重分析与画像重建 |
+| Web feed 消费语义 | ✅ | `/api/recommendations` 默认不再返回已点赞、点踩、评论或忽略的内容；历史记录仍保留在数据库中用于画像学习与审计 |
+| 轻量忽略反馈 | ✅ | `/api/feedback` 支持 `dismiss`，用于从活跃推荐流消费当前条目但不写记忆事件、不触发即时认知学习 |
 | 体验优化：动态“老B友”语气 | ✅ | 推荐文案不再固定套模板，而是根据画像、偏好和近期反馈动态调整信息密度、温度、梗感与直给程度 |
 | M106 候选池即时换一批 | ✅ | `content_cache` 现已作为 discovery pool 使用，popup 可秒级从池子里换一批新推荐 |
 | M107 候选池容量与状态展示 | ✅ | runtime 会按 `pool_target_count` 持续补货，popup 会展示可换数量、最近补货数量和补货方向。`pool_target_count` 同时作为硬上限：pool ≥ 目标时 refresh（含 force_refresh）直接返回 `pool_at_cap` 不再 discover，溢出部分会按分数 / 时间 / explore 优先顺序降为 `suppressed` |
@@ -205,15 +207,18 @@ Recommendation(
 - `feedback_note`
 - `feedback_at`
 
-推荐反馈会同时写入事件层，供后续偏好和洞察分析消费。
+`like`、`dislike` 和 `comment` 会作为显式偏好信号进入后续偏好与洞察分析；`dismiss` 只表示“这条推荐已被用户忽略 / 消费”，用于把内容从活跃推荐流和候选池中移除，不写 memory event，也不触发即时认知反馈。
+
+`GET /api/recommendations` 默认面向活跃推荐流，会过滤任意已反馈内容：`recommendations.feedback_type` / legacy `feedback` 有值，或 `content_cache.pool_status='feedbacked'` 的条目都不会返回。历史记录查询仍可通过 `get_recommendations(include_feedbacked=True)` 保留旧语义，供审计、活动流和内部分析使用。响应模型在有值时可带 `feedback_type` 与 `pool_status`，便于 Web UI 兜底过滤。
 
 ### Unified Feedback Entry
 
-当前支持三种反馈信号：
+当前支持四种反馈信号：
 
 - `like`
 - `dislike`
 - `comment`
+- `dismiss`
 
 统一入口包括：
 

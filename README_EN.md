@@ -108,6 +108,8 @@ Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/do
 
 The agent will clone the repo, install dependencies, start the backend, run a health check, and ask a few questions with defaults. If unsure, pick the default. Xiaohongshu, Douyin, and YouTube signals are used in the initial profile only when you explicitly opt in.
 
+Once the local backend is started with `openbiliclaw start`, it also serves a standalone Web UI on the same port: open `http://127.0.0.1:8420/web` for a larger browser view of recommendations, profile, messages, chat, and settings. The root path `/` also redirects to `/web`. Note that: **The Web UI is just another better frontend, the backend still relies on the browser extension to sync cookies and so on.** The container/API-only `openbiliclaw serve-api` entrypoint does not serve the Web UI by default; pass `--with-web` when you explicitly want the page on that server.
+
 If the backend runs on another machine in your LAN, start it with `openbiliclaw start --host 0.0.0.0 --port 8420`, then set the extension's "Backend host" field to that machine's LAN IP, for example `192.168.1.100`.
 
 ### 3. Log in to content platforms in the same browser

@@ -13,6 +13,7 @@
 | 运行时频率配置 | ✅ | `refresh_check_interval_seconds`、行为触发阈值、trending / explore 间隔、单轮发现上限、主动推送间隔和 speculator idle tick 都从 `[scheduler]` 读取，配置热重载后重建 runtime 生效。 |
 | 浏览器 presence gate | ✅ | `background_llm_work_allowed()` 结合 `scheduler.enabled` 与 `pause_on_extension_disconnect` 控制 daemon-owned 后台 LLM / embedding 工作。 |
 | Runtime event stream | ✅ | `/api/runtime-stream` 向扩展推送状态、Cookie sync 请求、配置重载和 presence 事件。 |
+| Bundled Web UI | ✅ | `start` 默认让 FastAPI 同端口托管包内 `webui/index.html`；`serve-api` 默认 API-only，显式 `--with-web` 才挂载 `/web`。 |
 | 自动更新 | ✅ | `AutoUpdateService` 周期性检查 backend git tag，发现新 backend 版本后执行 `git pull --ff-only` 与依赖同步。 |
 | 账号同步 | ✅ | `AccountSyncService` 同步 B 站账号历史、收藏和关注等信号；历史按 `view_at + 同秒 bvid 集合` 增量导入，收藏 / 关注只把新增 ID 转成画像事件，避免重放旧信号。 |
 | 多源 bootstrap 去重 | ✅ | `/api/sources/{xhs,dy,yt}/task-result` 会用 `source_bootstrap_state.json` 过滤跨任务旧 identity key；任务结果仍完整保留，只有新增项进入 memory / profile pipeline。 |
@@ -22,6 +23,15 @@
 | 配置热重载 LLM override | ✅ | `RuntimeContext._rebuild_components()` 从 config 构造 `module_overrides`，同时注入主 `LLMService` 与 `SoulEngine` 内部 service；热重载后的 speculator tick detached 到 `BackgroundTaskRegistry`，不阻塞 `/api/config` 响应。 |
 
 ## 公开 API
+
+### Bundled Web UI routes
+
+FastAPI app 支持按需挂载包内 Web UI。`openbiliclaw start` 默认启用；`openbiliclaw serve-api` 默认不启用，只有传 `--with-web` 时才挂载：
+
+- `GET /`：返回 `302`，跳转到 `/web`。
+- `GET /web` / `GET /web/`：返回 `src/openbiliclaw/webui/index.html`。
+
+这组入口和 `/api/*` 共用同一个后端进程与端口。Web UI 只负责浏览器内的推荐首页体验；Cookie 同步、XHS / 抖音 / YouTube 任务领取和后台 presence 仍由浏览器插件承担。
 
 ```python
 from openbiliclaw.runtime.updater import AutoUpdateService

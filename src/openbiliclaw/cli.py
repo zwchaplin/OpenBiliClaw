@@ -452,13 +452,18 @@ def _build_dialogue(soul_engine: Any) -> Any:
     return SocraticDialogue(llm=_build_registry(), soul_engine=soul_engine, session="cli")
 
 
-def _run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+def _run_api_server(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8420,
+    serve_webui: bool = False,
+) -> None:
     """Run the local FastAPI service used by the browser extension."""
     import uvicorn
 
     from openbiliclaw.api.app import create_app
 
-    api_app = create_app()
+    api_app = create_app(serve_webui=serve_webui)
     state = getattr(api_app, "state", None)
     if bool(getattr(state, "degraded", False)):
         issues = []
@@ -3132,23 +3137,25 @@ def start(
     )
     _warn_if_pause_on_disconnect_requires_presence()
     _maybe_create_runtime_database_backup()
-    _run_api_server(host=host, port=port)
+    _run_api_server(host=host, port=port, serve_webui=True)
 
 
 @app.command("serve-api")
 def serve_api(
     host: str = typer.Option("0.0.0.0", "--host", help="API 监听地址"),
     port: int = typer.Option(8420, "--port", min=1, max=65535, help="API 监听端口"),
+    with_web: bool = typer.Option(False, "--with-web", help="同时托管 Web UI（/web）"),
 ) -> None:
     """启动容器友好的 API 服务入口."""
     _print_page_title("启动 OpenBiliClaw", "容器 API 服务")
+    web_hint = "Web UI 同端口可用：/web" if with_web else "Web UI 未启用；如需托管请加 --with-web"
     _print_status_panel(
         "info",
         "API 服务",
-        f"正在启动容器友好的后端入口，当前监听 {host}:{port}。Web UI 同端口可用：/web",
+        f"正在启动容器友好的后端入口，当前监听 {host}:{port}。{web_hint}",
     )
     _warn_if_pause_on_disconnect_requires_presence()
-    _run_api_server(host=host, port=port)
+    _run_api_server(host=host, port=port, serve_webui=with_web)
 
 
 @app.command("db-repair")

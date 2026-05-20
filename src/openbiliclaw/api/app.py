@@ -259,6 +259,7 @@ def create_app(
     runtime_event_hub: Any | None = None,
     account_sync_service: Any | None = None,
     auto_update_service: Any | None = None,
+    serve_webui: bool = False,
 ) -> FastAPI:
     """Create the local backend API app."""
     from openbiliclaw.api.runtime_context import (
@@ -289,23 +290,27 @@ def create_app(
         allow_headers=["*"],
     )
 
-    def _webui_html() -> HTMLResponse:
-        html = (
-            resources.files("openbiliclaw.webui").joinpath("index.html").read_text(encoding="utf-8")
-        )
-        return HTMLResponse(html)
+    if serve_webui:
 
-    @app.get("/", include_in_schema=False)
-    async def webui_root() -> RedirectResponse:
-        return RedirectResponse(url="/web", status_code=302)
+        def _webui_html() -> HTMLResponse:
+            html = (
+                resources.files("openbiliclaw.webui")
+                .joinpath("index.html")
+                .read_text(encoding="utf-8")
+            )
+            return HTMLResponse(html)
 
-    @app.get("/web", response_class=HTMLResponse, include_in_schema=False)
-    async def webui() -> HTMLResponse:
-        return _webui_html()
+        @app.get("/", include_in_schema=False)
+        async def webui_root() -> RedirectResponse:
+            return RedirectResponse(url="/web", status_code=302)
 
-    @app.get("/web/", response_class=HTMLResponse, include_in_schema=False)
-    async def webui_slash() -> HTMLResponse:
-        return _webui_html()
+        @app.get("/web", response_class=HTMLResponse, include_in_schema=False)
+        async def webui() -> HTMLResponse:
+            return _webui_html()
+
+        @app.get("/web/", response_class=HTMLResponse, include_in_schema=False)
+        async def webui_slash() -> HTMLResponse:
+            return _webui_html()
 
     # ── Build RuntimeContext ────────────────────────────────────────
     config = load_config()

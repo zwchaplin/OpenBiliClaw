@@ -4,6 +4,15 @@
 
 ---
 
+## Unreleased: 独立 Web UI 与推荐反馈语义（2026-05-20）
+
+- `openbiliclaw start` 同端口托管独立 Web UI：`GET /` 302 跳转到 `/web`，`GET /web` / `/web/` 返回打包进 wheel 的推荐首页 HTML，方便在浏览器中用大屏页面浏览推荐、画像、消息和设置；`serve-api` 默认保持 API-only，显式传 `--with-web` 才挂载该页面。
+- `/api/recommendations` 默认过滤已经反馈 / 忽略的内容，保留 `recommendations` 历史记录用于画像学习与审计，但不再把已消费条目返回给活跃推荐流；响应在有值时暴露可选 `feedback_type` / `pool_status` 供前端兜底。
+- `/api/feedback` 新增 `dismiss` 语义：用于“忽略这条推荐并从池子中移除”，只写入消费状态，不写 memory event、不触发即时认知反馈，也不会出现在 activity feed 的“写了一句反馈”文案里。
+- activity feed 反馈文案改为显式处理 `like` / `dislike` / `comment`，其中只有 `comment` 展示“写了一句反馈”；`dismiss` 和未知类型不会被渲染成反馈活动。
+
+---
+
 ## v0.3.87 / extension v0.3.38: runtime 配置真实生效（2026-05-20）
 
 - Runtime: YouTube steady-state discovery now runs through an independent backend producer loop with per-strategy daily execution budgets, `min_interval_minutes` throttling, and source-deficit gating.

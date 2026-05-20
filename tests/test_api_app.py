@@ -625,10 +625,24 @@ class TestBackendAPI:
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "service": "openbiliclaw-api"}
 
-    def test_webui_routes_serve_bundled_html(self) -> None:
+    def test_webui_routes_are_disabled_by_default(self) -> None:
         from fastapi.testclient import TestClient
 
         app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        assert client.get("/", follow_redirects=False).status_code == 404
+        assert client.get("/web").status_code == 404
+
+    def test_webui_routes_serve_bundled_html_when_enabled(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = create_app(
+            memory_manager=object(),
+            database=object(),
+            soul_engine=object(),
+            serve_webui=True,
+        )
         client = TestClient(app)
 
         root_response = client.get("/", follow_redirects=False)

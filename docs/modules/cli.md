@@ -219,9 +219,13 @@ $ openbiliclaw start
 
 当前 `start` 会启动这些接口：
 
+- `GET /`：302 跳转到 `/web`
+- `GET /web` / `GET /web/`：返回打包在后端包内的独立推荐首页 Web UI
 - `GET /api/health`
 - `POST /api/events`
 - `GET /api/recommendations`
+
+Web UI 与 API 使用同一个 host/port；`start` 默认启用 Web UI，启动后可打开 `http://127.0.0.1:8420/web`，在浏览器大屏页面里浏览推荐、画像、消息、聊天和设置。它仍依赖原插件同步 Cookie 与跨平台任务结果，但不再受浏览器 side panel 尺寸限制。
 
 ### `openbiliclaw serve-api`
 
@@ -231,9 +235,11 @@ $ openbiliclaw start
 $ openbiliclaw serve-api
 
 $ openbiliclaw serve-api --host 0.0.0.0 --port 8420
+
+$ openbiliclaw serve-api --with-web
 ```
 
-推荐容器内使用该命令作为启动入口。
+推荐容器内使用该命令作为启动入口。`serve-api` 默认只提供 API，不挂载 `/web`，避免 API-only / 容器场景意外暴露带设置入口的前端页面；如果明确需要同端口托管 Web UI，传 `--with-web` 后会启用 `GET /` → `/web` 302 和 `/web` / `/web/` HTML 页面。
 当 `scheduler.pause_on_extension_disconnect=true` 时，`serve-api` 与 `start` 一样会在 uvicorn 启动前打印 extension presence WARN，提醒容器后端若没有插件客户端连接，后台 LLM 工作会在宽限期后暂停。
 当配置进入降级模式时，`serve-api` 也会打印同一张 `降级模式 / Degraded mode` 面板；容器或脚本可继续通过 `/api/config` 写入修复配置，再重启服务让新 registry 生效。
 
