@@ -3109,20 +3109,25 @@ def logs_prune(
 
 @app.command()
 def start(
-    host: str = typer.Option("127.0.0.1", "--host", help="API 监听地址"),
-    port: int = typer.Option(8420, "--port", min=1, max=65535, help="API 监听端口"),
+    host: str = typer.Option("", "--host", help="API 监听地址（默认读 config.toml [api].host）"),
+    port: int = typer.Option(0, "--port", min=0, max=65535, help="API 监听端口（默认读 config.toml [api].port）"),
 ) -> None:
     """启动 OpenBiliClaw Agent."""
+    from openbiliclaw.config import load_config
+
+    cfg = load_config()
+    effective_host = host if host else cfg.api.host
+    effective_port = port if port else cfg.api.port
     _print_page_title("启动 OpenBiliClaw", "本地 API 服务")
     _ensure_runtime_database_healthy()
     _print_status_panel(
         "info",
         "API 服务",
-        f"正在启动本地后端，当前监听 {host}:{port}。",
+        f"正在启动本地后端，当前监听 {effective_host}:{effective_port}。",
     )
     _warn_if_pause_on_disconnect_requires_presence()
     _maybe_create_runtime_database_backup()
-    _run_api_server(host=host, port=port)
+    _run_api_server(host=effective_host, port=effective_port)
 
 
 @app.command("serve-api")
@@ -3394,6 +3399,50 @@ def _ask_yt_inclusion() -> bool:
         )
         return False
     return True
+
+
+def _ask_network_binding() -> bool:
+    """Ask whether the backend should listen on all interfaces (0.0.0.0).
+
+    Returns True if the user confirms all-interface binding, False for
+    localhost-only.  Non-interactive terminals default to True (the new
+    default keeps mobile web accessible).
+    """
+    if not _is_interactive_terminal():
+        return True
+
+    console.print()
+    console.print("[bold]📱 移动端访问[/bold]")
+    console.print(
+        "OpenBiliClaw 自带移动端 Web（[bold cyan]/m/[/bold cyan]），"
+        "同一局域网的手机扫码即可打开。"
+    )
+    console.print()
+    console.print(
+        "为此，后端需要监听 [bold]0.0.0.0[/bold]（所有网卡），"
+        "这样手机才能连上来。\n"
+        "如果你只在本机使用、不需要手机端，选 N 会改为仅监听 127.0.0.1。"
+    )
+    console.print()
+    console.print(
+        "[dim]后续可在 config.toml 的 [api].host 随时切换。[/dim]"
+    )
+    console.print()
+    return typer.confirm("允许局域网设备访问（推荐）?", default=True)
+
+
+def _persist_api_host_choice(*, allow_lan: bool) -> None:
+    """Persist the user's network binding choice to config.toml."""
+    try:
+        from openbiliclaw.config import load_config, save_config
+
+        cfg = load_config()
+        target_host = "0.0.0.0" if allow_lan else "127.0.0.1"
+        if cfg.api.host != target_host:
+            cfg.api.host = target_host
+            save_config(cfg)
+    except Exception:
+        return
 
 
 def _persist_init_source_enabled_flags(
@@ -3677,6 +3726,11 @@ def init(
             console.print(f"  [yellow]关注列表拉取失败: {exc}[/yellow]")
 
         return hist, favs, follows
+
+    # v0.3.89+: ask user whether the backend should be reachable from
+    # the local network (0.0.0.0) so mobile /m/ works out of the box.
+    allow_lan = _ask_network_binding()
+    _persist_api_host_choice(allow_lan=allow_lan)
 
     # v0.3.27+: ask the user whether to include xhs data, with a prep
     # checklist when they opt in. Defaults stay off unless the user

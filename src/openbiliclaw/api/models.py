@@ -35,6 +35,7 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     profile_ready: bool | None = None
+    lan_ip: str | None = None
 
 
 class RecommendationOut(BaseModel):

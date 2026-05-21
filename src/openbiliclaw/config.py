@@ -352,11 +352,26 @@ class SoulConfig:
 
 
 @dataclass
+class ApiConfig:
+    """Backend API server settings.
+
+    ``host`` controls which network interface the server binds to.
+    ``0.0.0.0`` (default) binds all interfaces so mobile devices on the
+    same LAN can reach the ``/m/`` mobile web.  ``127.0.0.1`` restricts
+    access to this machine only.
+    """
+
+    host: str = "0.0.0.0"
+    port: int = 8420
+
+
+@dataclass
 class Config:
     """Root configuration for OpenBiliClaw."""
 
     language: str = "zh"
     data_dir: str = "data"
+    api: ApiConfig = field(default_factory=ApiConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
     sources: SourcesConfig = field(default_factory=SourcesConfig)

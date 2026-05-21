@@ -35,6 +35,7 @@ import {
 import {
   createQrSvgMarkup,
   getMobileQrViewState,
+  isLoopbackMobileHost,
 } from "./popup-qr.js";
 import {
   appendRecommendations,
@@ -1116,7 +1117,27 @@ function openMobileWebUrl(url) {
 
 async function renderMobileQrPanel() {
   const endpoint = await getBackendEndpointConfig();
-  const view = getMobileQrViewState(endpoint);
+
+  // When the configured host is loopback, try to get the server's
+  // detected LAN IP from the health endpoint so the QR code shows
+  // an address that mobile devices can actually reach.
+  let effectiveEndpoint = endpoint;
+  if (isLoopbackMobileHost(endpoint.host)) {
+    try {
+      const base = `http://${endpoint.host}:${endpoint.port}`;
+      const resp = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.lan_ip && !isLoopbackMobileHost(data.lan_ip)) {
+          effectiveEndpoint = { ...endpoint, host: data.lan_ip };
+        }
+      }
+    } catch {
+      // Health fetch failed — fall through with original endpoint.
+    }
+  }
+
+  const view = getMobileQrViewState(effectiveEndpoint);
   currentMobileWebUrl = view.url;
 
   if (elements.mobileQrCode instanceof HTMLElement) {

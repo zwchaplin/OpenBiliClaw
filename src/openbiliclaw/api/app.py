@@ -653,9 +653,24 @@ def create_app(
             logger.debug("Health profile readiness check failed", exc_info=True)
             return None
 
+    def _detect_lan_ip() -> str | None:
+        """Best-effort LAN IP detection via UDP connect trick."""
+        import socket
+
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.1)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip if ip and not ip.startswith("127.") else None
+        except Exception:
+            return None
+
     @app.get("/api/health", response_model=HealthResponse, response_model_exclude_none=True)
     def health() -> HealthResponse | JSONResponse:
         profile_ready = _health_profile_ready()
+        lan_ip = _detect_lan_ip()
         if bool(getattr(ctx, "degraded", False)):
             body: dict[str, object] = {
                 "status": "degraded",
@@ -665,11 +680,14 @@ def create_app(
             }
             if profile_ready is not None:
                 body["profile_ready"] = profile_ready
+            if lan_ip is not None:
+                body["lan_ip"] = lan_ip
             return JSONResponse(status_code=200, content=body)
         return HealthResponse(
             status="ok",
             service="openbiliclaw-api",
             profile_ready=profile_ready,
+            lan_ip=lan_ip,
         )
 
     @app.post("/api/bilibili/cookie", response_model=BilibiliCookieResponse)

@@ -623,7 +623,9 @@ class TestBackendAPI:
         response = client.get("/api/health")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "service": "openbiliclaw-api"}
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["service"] == "openbiliclaw-api"
 
     def test_favicon_endpoint_serves_mobile_web_icon(self) -> None:
         from fastapi.testclient import TestClient
@@ -650,11 +652,10 @@ class TestBackendAPI:
         response = client.get("/api/health")
 
         assert response.status_code == 200
-        assert response.json() == {
-            "status": "ok",
-            "service": "openbiliclaw-api",
-            "profile_ready": True,
-        }
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["service"] == "openbiliclaw-api"
+        assert body["profile_ready"] is True
 
     def test_bilibili_cookie_endpoint_persists_and_validates(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
