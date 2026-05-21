@@ -17,9 +17,10 @@
 
 ---
 
-## 📌 v0.3.88 Highlights (2026-05-21)
+## 📌 v0.3.88 / extension v0.3.41 Highlights (2026-05-21)
 
 - **📱 Mobile Web is now a primary surface** — open `/m/` from a phone on the same LAN to view recommendations, profile, chat, messages, and delight candidates; the phone icon in the extension header now opens a scan-ready QR code.
+- **🖼️ Covers now load through the local proxy** — Mobile Web and the extension side panel route recommendation, delight, and message covers through `/api/image-proxy`, with backend CDN whitelist, redirect, and 10MB size guards plus stable fallback placeholders.
 - **✨ Mobile delight card refreshed** — the recommendation tab now shows delight candidates as a compact banner, with the reason wrapping around the left cover and actions aligned with the extension.
 - **🚫 LLM fallback off by default** — `[llm].fallback_enabled` defaults to `false`; failures surface immediately instead of silently switching providers.
 - **🚫 Embedding fallback off by default** — `[llm.embedding].fallback_enabled` defaults to `false`; no more borrowing chat-side credentials or falling through to other embedding providers.
@@ -483,7 +484,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.88 / extension v0.3.39: Mobile Web as a primary surface and fallback off by default (2026-05-21)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
+Latest: **v0.3.88 / extension v0.3.41: extension cover proxy release (2026-05-21)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
 
 ## 🗺️ Roadmap
 

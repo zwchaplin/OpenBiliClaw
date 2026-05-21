@@ -19,9 +19,10 @@
 
 ---
 
-## 📌 v0.3.88 重要更新（2026-05-21）
+## 📌 v0.3.88 / extension v0.3.41 重要更新（2026-05-21）
 
 - **📱 移动端 Web 成为主入口之一** —— 同局域网手机访问 `/m/` 可看推荐、画像、聊一聊、消息和惊喜推荐；插件顶部手机图标可直接弹出扫码入口。
+- **🖼️ 封面图改走本地代理** —— 移动端 Web 和插件 side panel 的推荐、惊喜推荐、消息封面统一经 `/api/image-proxy` 加载，后端做 CDN 白名单、redirect 和 10MB 大小校验，失败时保留占位区域。
 - **✨ 手机惊喜推荐样式刷新** —— 移动端推荐页现在用真实 compact banner 展示惊喜推荐，推荐原因围绕左侧头图排版，动作与插件保持一致。
 - **🚫 LLM fallback 默认关闭** —— `[llm].fallback_enabled` 默认 `false`，请求失败直接暴露而非静默切 provider。
 - **🚫 Embedding fallback 默认关闭** —— `[llm.embedding].fallback_enabled` 默认 `false`，不再借用 chat-side 凭据或切换 embedding provider。
@@ -546,7 +547,7 @@ OpenBiliClaw/
 
 ## 📜 更新日志
 
-最新版本：**v0.3.88 / extension v0.3.39: 移动端 Web 主入口与 fallback 默认关闭（2026-05-21）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)。插件包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)，后端源码更新看 `backend-v*` tag，不发布后端桌面包。
+最新版本：**v0.3.88 / extension v0.3.41: 插件封面代理发布（2026-05-21）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)。插件包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)，后端源码更新看 `backend-v*` tag，不发布后端桌面包。
 
 ## 🗺️ 后续规划
 

@@ -4,6 +4,12 @@
 
 ---
 
+## v0.3.88 / extension v0.3.41: 插件封面代理发布（2026-05-21）
+
+- 浏览器插件版本提升到 extension v0.3.41，推荐、惊喜推荐和消息封面统一走配置的本地后端 `/api/image-proxy`，不再直接暴露第三方 CDN 图片请求；本次仅发布插件包，后端源码版本仍为 v0.3.88。
+
+---
+
 ## v0.3.88 / extension v0.3.40: 移动端视觉优化与局域网默认可达（2026-05-21）
 
 - 移动 Web 惊喜推荐卡片视觉优化：封面图加 `shape-outside` 圆角环绕让文字沿圆角自然流动；推荐理由字号从 12px 提升到 12.5px、行高从 1.48 提到 1.68 并增加字距提升阅读舒适度；「推荐原因」标签改为品牌粉蓝渐变底 + 细描边；卡片圆角从 14px 加大到 18px 并增加右上角径向渐变光晕与多层阴影增强纵深感；小屏移除理由文本截断改为字号微缩。
@@ -19,6 +25,7 @@
 
 ## v0.3.88 / extension v0.3.39: 移动端 Web 主入口与 fallback 默认关闭（2026-05-21）
 
+- 新增 `/api/image-proxy` 后端图片代理，移动 Web 和浏览器插件的推荐、惊喜推荐、消息封面统一经本地后端加载；代理限制白名单 CDN、逐跳校验 redirect、校验 `image/*` 类型和 10MB 实际字节，前端加载失败时保留固定比例占位。
 - `[llm].fallback_enabled` 新增为默认关闭的 LLM 请求 fallback 开关；关闭时 `LLMRegistry.complete()` 只调用默认 provider，失败直接暴露。
 - `[llm.embedding].fallback_enabled` 新增为默认关闭的 embedding fallback 开关；关闭时不切 provider、不借用 `[llm.<provider>]` 凭据，且 embedding provider 留空表示不启用，不再跟随默认 LLM。
 - 浏览器插件设置页「模型」tab 增加 LLM fallback 与 embedding fallback 两个开关，并更新文案说明 embedding 与 LLM 独立配置。
