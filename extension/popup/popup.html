@@ -299,6 +299,9 @@
     }
 
     .tab-button:focus-visible,
+    .mobile-button:focus-visible,
+    .messages-button:focus-visible,
+    .settings-gear:focus-visible,
     .recommendation-preview:focus-visible,
     .action-button:focus-visible,
     .chat-input:focus-visible,
@@ -2814,6 +2817,7 @@
       flex-shrink: 0;
     }
 
+    .mobile-button,
     .messages-button {
       width: 32px;
       height: 32px;
@@ -2829,11 +2833,13 @@
       transition: background 0.15s, transform 0.15s;
     }
 
+    .mobile-button:hover,
     .messages-button:hover {
       background: var(--brand-soft);
       transform: translateY(-1px);
     }
 
+    .mobile-button svg,
     .messages-button svg {
       width: 16px;
       height: 16px;
@@ -2859,6 +2865,102 @@
     }
 
     .message-badge[hidden] { display: none; }
+
+    /* ── Mobile QR overlay ───────────────────────────────────── */
+
+    .mobile-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 100;
+      background:
+        radial-gradient(circle at 15% 12%, rgba(251, 114, 153, 0.16), transparent 30%),
+        radial-gradient(circle at 88% 18%, rgba(90, 169, 255, 0.18), transparent 26%),
+        linear-gradient(180deg, var(--bg-base) 0%, var(--bg-sky) 100%);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .mobile-overlay[hidden] { display: none; }
+
+    .mobile-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .mobile-header h2 {
+      margin-top: 3px;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .mobile-qr-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: var(--surface-strong);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .mobile-qr-code {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: min(100%, 236px);
+      padding: 12px;
+      border-radius: 18px;
+      background: #fff;
+      border: 1px solid rgba(230, 237, 248, 0.96);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    }
+
+    .mobile-qr-code svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: 204px;
+    }
+
+    .mobile-url {
+      width: 100%;
+      padding: 9px 10px;
+      border-radius: 12px;
+      background: rgba(244, 247, 255, 0.92);
+      color: var(--text-main);
+      font-size: 12px;
+      line-height: 1.4;
+      font-weight: 700;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+
+    .mobile-hint {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+
+    .mobile-hint[data-tone="warning"] {
+      color: #8a6520;
+    }
+
+    .mobile-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      width: 100%;
+    }
 
     /* ── Messages overlay ─────────────────────────────────────── */
 
@@ -3405,6 +3507,9 @@
           </div>
         </div>
         <div class="hero-actions">
+          <button id="mobileQrButton" class="mobile-button" type="button" title="手机打开" aria-label="显示移动端二维码">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h2v2h-2zM18 14h3M14 18h3M19 18h2v3h-5"/></svg>
+          </button>
           <button id="messagesButton" class="messages-button" type="button" title="消息" aria-label="查看消息">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span id="messageBadge" class="message-badge" hidden>0</span>
@@ -3601,6 +3706,26 @@
         </div>
       </section>
     </main>
+
+    <!-- ── Mobile QR overlay ── -->
+    <div id="mobileQrOverlay" class="mobile-overlay" hidden>
+      <div class="mobile-header">
+        <div>
+          <p class="view-kicker">Mobile Web</p>
+          <h2>手机扫码打开</h2>
+        </div>
+        <button id="mobileQrBack" class="settings-back" type="button" title="返回" aria-label="关闭移动端二维码">&larr;</button>
+      </div>
+      <div class="mobile-qr-card">
+        <div id="mobileQrCode" class="mobile-qr-code" aria-live="polite"></div>
+        <p id="mobileQrUrl" class="mobile-url"></p>
+        <p id="mobileQrHint" class="mobile-hint" data-tone="info"></p>
+        <div class="mobile-actions">
+          <button id="mobileQrCopy" class="action-button action-secondary" type="button">复制链接</button>
+          <button id="mobileQrOpen" class="action-button action-primary" type="button">打开页面</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ── Messages overlay ── -->
     <div id="messagesOverlay" class="messages-overlay" hidden>

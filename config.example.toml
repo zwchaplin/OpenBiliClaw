@@ -10,6 +10,14 @@ language = "zh"
 # Data directory (relative to project root)
 data_dir = "data"
 
+[api]
+# 后端 API 监听地址。
+# "0.0.0.0" = 绑定所有网卡（默认），同局域网手机可通过 /m/ 访问移动端 Web。
+# "127.0.0.1" = 仅本机可访问，更安全但手机扫码打不开。
+host = "0.0.0.0"
+# 后端 API 监听端口。
+port = 8420
+
 [llm]
 # Default LLM provider: "openai" | "claude" | "gemini" | "deepseek" | "ollama" | "openrouter"
 # 这里选择的 provider 决定了运行时会检查哪一组敏感字段。

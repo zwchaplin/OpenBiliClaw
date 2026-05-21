@@ -34,6 +34,19 @@ def test_bootstrap_extends_no_proxy_for_localhost(monkeypatch: pytest.MonkeyPatc
     assert os.environ["no_proxy"] == "example.com,localhost,127.0.0.1,::1"
 
 
+def test_bootstrap_defaults_to_lan_accessible_bind_host(tmp_path: Path) -> None:
+    args = bootstrap.build_arg_parser().parse_args(["--project-dir", str(tmp_path)])
+
+    assert args.host == "0.0.0.0"
+
+
+def test_bootstrap_connects_to_loopback_when_binding_all_interfaces() -> None:
+    assert bootstrap._connect_host_for_bind_host("0.0.0.0") == "127.0.0.1"
+    assert bootstrap._connect_host_for_bind_host("::") == "127.0.0.1"
+    assert bootstrap._connect_host_for_bind_host("127.0.0.1") == "127.0.0.1"
+    assert bootstrap._connect_host_for_bind_host("192.168.1.100") == "192.168.1.100"
+
+
 def _write_minimal_config(
     tmp_path: Path,
     *,
@@ -135,7 +148,7 @@ def test_apply_embedding_config_writes_embedding_owned_credentials(tmp_path: Pat
     text = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert "llm.embedding.base_url" in result["written"]
     assert "llm.embedding.api_key" in result["written"]
-    assert '[llm.embedding]' in text
+    assert "[llm.embedding]" in text
     assert 'provider = "openai"' in text
     assert 'model = "text-embedding-3-small"' in text
     assert 'base_url = "https://embed.example.com/v1"' in text
@@ -144,10 +157,25 @@ def test_apply_embedding_config_writes_embedding_owned_credentials(tmp_path: Pat
 
 def test_build_init_command_appends_all_source_flags_for_local(tmp_path: Path) -> None:
     command = bootstrap.build_init_command(
-        "local", tmp_path, "--no-xhs", "--no-douyin", "--yes-youtube"
+        "local",
+        tmp_path,
+        "--no-xhs",
+        "--no-douyin",
+        "--yes-youtube",
+        bilibili_favorite_limit=120,
+        bilibili_follow_limit=80,
     )
 
-    assert command[-4:] == ["init", "--no-xhs", "--no-douyin", "--yes-youtube"]
+    assert command[-8:] == [
+        "init",
+        "--no-xhs",
+        "--no-douyin",
+        "--yes-youtube",
+        "--bilibili-favorite-limit",
+        "120",
+        "--bilibili-follow-limit",
+        "80",
+    ]
 
 
 def test_interactive_answers_apply_source_flags() -> None:
@@ -159,6 +187,8 @@ def test_interactive_answers_apply_source_flags() -> None:
         youtube=False,
         cookie_mode="manual",
         bilibili_cookie="SESSDATA=test; bili_jct=test; DedeUserID=1",
+        bilibili_favorite_limit=120,
+        bilibili_follow_limit=80,
     )
 
     argv = bootstrap.confirmation_answers_to_bootstrap_args(answers)
@@ -171,9 +201,29 @@ def test_interactive_answers_apply_source_flags() -> None:
         "--no-xhs",
         "--yes-douyin",
         "--no-youtube",
+        "--bilibili-favorite-limit",
+        "120",
+        "--bilibili-follow-limit",
+        "80",
         "--bilibili-cookie",
         "SESSDATA=test; bili_jct=test; DedeUserID=1",
     ]
+
+
+def test_collect_interactive_confirmations_collects_bilibili_limits() -> None:
+    inputs = iter(["", "", "120", "80", "n", "y", "n", "manual", "SESSDATA=test"])
+
+    answers = bootstrap.collect_interactive_confirmations(input_func=lambda _prompt: next(inputs))
+
+    assert answers.embedding_provider == "ollama"
+    assert answers.embedding_model == "bge-m3"
+    assert answers.bilibili_favorite_limit == 120
+    assert answers.bilibili_follow_limit == 80
+    assert answers.xhs is False
+    assert answers.douyin is True
+    assert answers.youtube is False
+    assert answers.cookie_mode == "manual"
+    assert answers.bilibili_cookie == "SESSDATA=test"
 
 
 def test_collect_interactive_confirmations_requires_input_func() -> None:
@@ -244,7 +294,13 @@ def test_docker_secret_detector_command_reads_runtime_config() -> None:
 
 def test_build_init_command_appends_explicit_source_flags_for_docker(tmp_path: Path) -> None:
     command = bootstrap.build_init_command(
-        "docker", tmp_path, "--yes-xhs", "--yes-douyin", "--no-youtube"
+        "docker",
+        tmp_path,
+        "--yes-xhs",
+        "--yes-douyin",
+        "--no-youtube",
+        bilibili_favorite_limit=120,
+        bilibili_follow_limit=80,
     )
 
     assert command == [
@@ -257,6 +313,10 @@ def test_build_init_command_appends_explicit_source_flags_for_docker(tmp_path: P
         "--yes-xhs",
         "--yes-douyin",
         "--no-youtube",
+        "--bilibili-favorite-limit",
+        "120",
+        "--bilibili-follow-limit",
+        "80",
     ]
 
 

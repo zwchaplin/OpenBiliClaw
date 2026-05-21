@@ -14,6 +14,23 @@ test("popup header keeps compact status inline with brand row", () => {
   assert.doesNotMatch(popupMarkup, /id="statusText"/);
 });
 
+test("popup header exposes a local mobile web QR entry", () => {
+  const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
+  const popupJs = readFileSync(resolve("popup", "popup.js"), "utf8");
+  const popupMarkup = popupHtml.match(/<header class="hero">[\s\S]*?<\/header>/)?.[0] ?? "";
+  const overlayMarkup =
+    popupHtml.match(/<div id="mobileQrOverlay"[\s\S]*?<!-- ── Messages overlay ── -->/)?.[0] ?? "";
+
+  assert.match(popupMarkup, /id="mobileQrButton"/);
+  assert.match(popupMarkup, /aria-label="显示移动端二维码"/);
+  assert.match(popupMarkup, /id="mobileQrButton"[\s\S]*id="messagesButton"[\s\S]*id="settingsGear"/);
+  assert.match(overlayMarkup, /id="mobileQrCode"/);
+  assert.match(overlayMarkup, /id="mobileQrCopy"/);
+  assert.match(overlayMarkup, /id="mobileQrOpen"/);
+  assert.match(popupJs, /createQrSvgMarkup/);
+  assert.doesNotMatch(popupHtml, /api\.qrserver|chart\.googleapis/);
+});
+
 test("recommendation header uses a compact top row with status chips", () => {
   const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
   const headerCardBlock =

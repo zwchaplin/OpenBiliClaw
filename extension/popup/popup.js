@@ -1,4 +1,5 @@
 import {
+  buildImageProxyPath,
   getActivityCardState,
   buildFeedbackPayload,
   buildNextCognitionHistoryState,
@@ -28,10 +29,16 @@ import {
 import { createRuntimeStreamClient } from "./popup-stream.js";
 import {
   getBackendEndpointConfig,
+  getBackendOrigin,
   isValidBackendHost,
   isValidBackendPort,
   updateBackendEndpoint,
 } from "./popup-backend-config.js";
+import {
+  createQrSvgMarkup,
+  getMobileQrViewState,
+  isLoopbackMobileHost,
+} from "./popup-qr.js";
 import {
   appendRecommendations,
   checkBackendStatus,
@@ -152,12 +159,28 @@ const elements = {
   chatInput: document.getElementById("chatInput"),
   chatSendButton: document.getElementById("chatSendButton"),
   chatStatus: document.getElementById("chatStatus"),
+  mobileQrButton: document.getElementById("mobileQrButton"),
+  mobileQrOverlay: document.getElementById("mobileQrOverlay"),
+  mobileQrBack: document.getElementById("mobileQrBack"),
+  mobileQrCode: document.getElementById("mobileQrCode"),
+  mobileQrUrl: document.getElementById("mobileQrUrl"),
+  mobileQrHint: document.getElementById("mobileQrHint"),
+  mobileQrCopy: document.getElementById("mobileQrCopy"),
+  mobileQrOpen: document.getElementById("mobileQrOpen"),
   messagesButton: document.getElementById("messagesButton"),
   messageBadge: document.getElementById("messageBadge"),
   messagesOverlay: document.getElementById("messagesOverlay"),
   messagesBack: document.getElementById("messagesBack"),
   messagesList: document.getElementById("messagesList"),
 };
+
+async function setProxyImageSrc(image, coverUrl) {
+  const path = buildImageProxyPath(coverUrl);
+  if (!path) return false;
+  const origin = await getBackendOrigin();
+  image.src = `${origin}${path}`;
+  return true;
+}
 
 let recommendationLoadCheckTimer = null;
 let runtimeStreamClient = null;
@@ -196,6 +219,7 @@ const CHAT_PLACEHOLDERS = [
 ];
 let chatPlaceholderIndex = 0;
 let chatPlaceholderTimer = null;
+let currentMobileWebUrl = "";
 
 function setRefreshButtonState(loading, message = "") {
   state.refreshStatusMessage = message;
@@ -1065,6 +1089,131 @@ function closeMessagesPanel() {
   if (overlay instanceof HTMLElement) overlay.hidden = true;
 }
 
+// ── Mobile QR panel ───────────────────────────────────────────
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+  return ok;
+}
+
+function openMobileWebUrl(url) {
+  if (!url) return;
+  try {
+    if (globalThis.chrome?.tabs?.create) {
+      void globalThis.chrome.tabs.create({ url });
+      return;
+    }
+  } catch {
+    // Fall back to window.open below.
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+async function renderMobileQrPanel() {
+  const endpoint = await getBackendEndpointConfig();
+
+  // When the configured host is loopback, try to get the server's
+  // detected LAN IP from the health endpoint so the QR code shows
+  // an address that mobile devices can actually reach.
+  let effectiveEndpoint = endpoint;
+  if (isLoopbackMobileHost(endpoint.host)) {
+    try {
+      const base = `http://${endpoint.host}:${endpoint.port}`;
+      const resp = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.lan_ip && !isLoopbackMobileHost(data.lan_ip)) {
+          effectiveEndpoint = { ...endpoint, host: data.lan_ip };
+        }
+      }
+    } catch {
+      // Health fetch failed — fall through with original endpoint.
+    }
+  }
+
+  const view = getMobileQrViewState(effectiveEndpoint);
+  currentMobileWebUrl = view.url;
+
+  if (elements.mobileQrCode instanceof HTMLElement) {
+    try {
+      elements.mobileQrCode.innerHTML = createQrSvgMarkup(view.url);
+    } catch (err) {
+      elements.mobileQrCode.textContent = "二维码生成失败";
+      console.error("Failed to render mobile QR:", err);
+    }
+  }
+  if (elements.mobileQrUrl instanceof HTMLElement) {
+    elements.mobileQrUrl.textContent = view.url;
+  }
+  if (elements.mobileQrHint instanceof HTMLElement) {
+    elements.mobileQrHint.textContent = view.hint;
+    elements.mobileQrHint.dataset.tone = view.tone;
+  }
+}
+
+async function openMobileQrPanel() {
+  const overlay = elements.mobileQrOverlay;
+  if (!(overlay instanceof HTMLElement)) return;
+  overlay.hidden = false;
+  await renderMobileQrPanel();
+}
+
+function closeMobileQrPanel() {
+  const overlay = elements.mobileQrOverlay;
+  if (overlay instanceof HTMLElement) overlay.hidden = true;
+}
+
+function bindMobileQr() {
+  if (elements.mobileQrButton instanceof HTMLElement) {
+    elements.mobileQrButton.addEventListener("click", () => {
+      void openMobileQrPanel();
+    });
+  }
+  if (elements.mobileQrBack instanceof HTMLElement) {
+    elements.mobileQrBack.addEventListener("click", closeMobileQrPanel);
+  }
+  if (elements.mobileQrCopy instanceof HTMLButtonElement) {
+    elements.mobileQrCopy.addEventListener("click", async () => {
+      if (!currentMobileWebUrl) await renderMobileQrPanel();
+      const original = elements.mobileQrCopy.textContent || "复制链接";
+      try {
+        const ok = await writeClipboardText(currentMobileWebUrl);
+        elements.mobileQrCopy.textContent = ok ? "已复制" : "复制失败";
+      } catch {
+        elements.mobileQrCopy.textContent = "复制失败";
+      } finally {
+        setTimeout(() => {
+          if (elements.mobileQrCopy instanceof HTMLButtonElement) {
+            elements.mobileQrCopy.textContent = original;
+          }
+        }, 1200);
+      }
+    });
+  }
+  if (elements.mobileQrOpen instanceof HTMLButtonElement) {
+    elements.mobileQrOpen.addEventListener("click", async () => {
+      if (!currentMobileWebUrl) await renderMobileQrPanel();
+      openMobileWebUrl(currentMobileWebUrl);
+    });
+  }
+}
+
 function renderMessagesList() {
   const container = elements.messagesList;
   if (!(container instanceof HTMLElement)) return;
@@ -1186,9 +1335,8 @@ function buildDelightCard(delight) {
   thumb.className = "message-delight-thumb";
   if (delight.cover_url) {
     const image = document.createElement("img");
-    image.src = delight.cover_url;
+    void setProxyImageSrc(image, delight.cover_url);
     image.alt = "";
-    image.referrerPolicy = "no-referrer";
     image.addEventListener("error", () => {
       image.remove();
       thumb.classList.add("is-fallback");
@@ -2651,9 +2799,8 @@ function renderDelightSlot() {
   thumb.className = "delight-banner-thumb";
   if (delight.cover_url) {
     const image = document.createElement("img");
-    image.src = delight.cover_url;
+    void setProxyImageSrc(image, delight.cover_url);
     image.alt = "";
-    image.referrerPolicy = "no-referrer";
     image.addEventListener("error", () => {
       image.remove();
       thumb.classList.add("is-fallback");
@@ -3103,9 +3250,8 @@ function renderRecommendations(items, { append = false } = {}) {
     cover.className = "recommendation-cover";
     if (item.cover_url) {
       const image = document.createElement("img");
-      image.src = item.cover_url;
+      void setProxyImageSrc(image, item.cover_url);
       image.alt = `${item.title} 的封面`;
-      image.referrerPolicy = "no-referrer";
       image.addEventListener("error", () => {
         image.remove();
         cover.classList.add("is-fallback");
@@ -4601,6 +4747,7 @@ async function initializePopup() {
   bindRefreshButton();
   bindActivityToggle();
   bindChat();
+  bindMobileQr();
   bindSettings();
 
   bindMessages();

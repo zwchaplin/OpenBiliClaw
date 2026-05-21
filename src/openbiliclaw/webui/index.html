@@ -1082,13 +1082,25 @@
       const url = String(value || "").trim();
       if (!url) return "";
       if (url.startsWith("//")) return `https:${url}`;
+      if (url.startsWith("http://")) return `https://${url.slice("http://".length)}`;
       return url;
     }
 
-    function coverImg(item) {
-      const url = normalizeImageUrl(item.cover_url);
+    function imageProxyUrl(value) {
+      const url = normalizeImageUrl(value);
       if (!url) return "";
-      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" referrerpolicy="no-referrer" loading="lazy">`;
+      try {
+        new URL(url);
+      } catch {
+        return "";
+      }
+      return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+    }
+
+    function coverImg(item) {
+      const url = imageProxyUrl(item.cover_url);
+      if (!url) return "";
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="lazy">`;
     }
 
     function contentUrl(item) {
@@ -2334,7 +2346,7 @@
     function renderDelightCover(delight) {
       const thumb = $("#delightBanner .thumb");
       if (!thumb) return;
-      const url = normalizeImageUrl(delight?.cover_url);
+      const url = imageProxyUrl(delight?.cover_url);
       thumb.replaceChildren();
       thumb.classList.toggle("has-image", Boolean(url));
       if (!url) return;
@@ -2342,7 +2354,6 @@
       image.src = url;
       image.alt = "";
       image.loading = "lazy";
-      image.referrerPolicy = "no-referrer";
       image.addEventListener("error", () => {
         image.remove();
         thumb.classList.remove("has-image");

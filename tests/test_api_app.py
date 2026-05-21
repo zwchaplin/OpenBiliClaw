@@ -623,7 +623,26 @@ class TestBackendAPI:
         response = client.get("/api/health")
 
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "service": "openbiliclaw-api"}
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["service"] == "openbiliclaw-api"
+
+    def test_favicon_endpoint_serves_mobile_web_icon(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = create_app(
+            memory_manager=object(),
+            database=object(),
+            soul_engine=object(),
+            serve_webui=True,
+        )
+        client = TestClient(app)
+
+        response = client.get("/favicon.ico")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("image/png")
+        assert response.content
 
     def test_webui_routes_are_disabled_by_default(self) -> None:
         from fastapi.testclient import TestClient
@@ -633,6 +652,8 @@ class TestBackendAPI:
 
         assert client.get("/", follow_redirects=False).status_code == 404
         assert client.get("/web").status_code == 404
+        assert client.get("/m/").status_code == 404
+        assert client.get("/favicon.ico").status_code == 404
 
     def test_webui_routes_serve_bundled_html_when_enabled(self) -> None:
         from fastapi.testclient import TestClient
@@ -656,6 +677,11 @@ class TestBackendAPI:
             assert "OpenBiliClaw" in response.text
             assert "为你推荐的内容" in response.text
 
+        mobile_response = client.get("/m/")
+        assert mobile_response.status_code == 200
+        assert mobile_response.headers["content-type"].startswith("text/html")
+        assert "OpenBiliClaw" in mobile_response.text
+
     def test_health_endpoint_reports_profile_ready_when_available(self) -> None:
         from fastapi.testclient import TestClient
 
@@ -669,11 +695,24 @@ class TestBackendAPI:
         response = client.get("/api/health")
 
         assert response.status_code == 200
-        assert response.json() == {
-            "status": "ok",
-            "service": "openbiliclaw-api",
-            "profile_ready": True,
-        }
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["service"] == "openbiliclaw-api"
+        assert body["profile_ready"] is True
+
+    def test_detect_lan_ip_prefers_rfc1918_interface_over_benchmark_tun(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from openbiliclaw.api import app as app_module
+
+        monkeypatch.setattr(app_module, "_default_route_ip", lambda: "198.18.0.1")
+        monkeypatch.setattr(
+            app_module,
+            "_interface_ipv4_candidates",
+            lambda: ["198.18.0.1", "192.168.31.98"],
+        )
+
+        assert app_module._detect_lan_ip() == "192.168.31.98"
 
     def test_bilibili_cookie_endpoint_persists_and_validates(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1657,6 +1696,7 @@ class TestBackendAPI:
                     "expression": "先给你捞一条新的。",
                     "topic_label": "刚补进来的新东西",
                     "presented": False,
+                    "feedback_type": "",
                     "content_id": "BV1NEW",
                     "content_url": "https://www.bilibili.com/video/BV1NEW",
                     "source_platform": "bilibili",
@@ -1729,6 +1769,7 @@ class TestBackendAPI:
                     "expression": "这条接在你刚刚看的后面也顺。",
                     "topic_label": "下一条",
                     "presented": False,
+                    "feedback_type": "",
                     "content_id": "BV1NEXT",
                     "content_url": "https://www.bilibili.com/video/BV1NEXT",
                     "source_platform": "bilibili",

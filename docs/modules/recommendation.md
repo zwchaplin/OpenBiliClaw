@@ -20,7 +20,7 @@
 | 6.2 朋友式推荐表达 | ✅ | 用 LLM 生成朋友式推荐理由和个性化 topic，并在 CLI 中真实展示 |
 | 6.3 推荐持久化 | ✅ | 推荐记录已补齐展示状态、结构化反馈字段和反馈更新时间 |
 | 候选排序统一 | ✅ | freshly discovered 与 cache backfill 现在共享同一套 tier / relevance / recency 排序口径 |
-| 9.1 反馈处理 | ✅ | CLI、本地 API 与插件 popup 已统一写回推荐反馈与 `feedback` 事件 |
+| 9.1 反馈处理 | ✅ | CLI、本地 API、插件 popup 与移动 Web 已统一写回推荐反馈与 `feedback` 事件 |
 | 9.2 画像更新 | ✅ | 反馈累计到阈值后会自动触发偏好层重分析与画像重建 |
 | Web feed 消费语义 | ✅ | `/api/recommendations` 默认不再返回已点赞、点踩、评论或忽略的内容；历史记录仍保留在数据库中用于画像学习与审计 |
 | 轻量忽略反馈 | ✅ | `/api/feedback` 支持 `dismiss`，用于从活跃推荐流消费当前条目但不写记忆事件、不触发即时认知学习 |
@@ -225,6 +225,7 @@ Recommendation(
 - CLI：`openbiliclaw feedback <id> <like|dislike|comment> [--note ...]`
 - API：`POST /api/feedback`
 - 插件 popup：卡片上的 `喜欢` / `不喜欢` / `写一句`
+- 移动 Web：推荐卡片反馈与惊喜推荐「喜欢 / 不感兴趣」共用后端反馈语义，惊喜推荐直接写入 `/api/delight/respond`
 
 ### PoolCurator
 

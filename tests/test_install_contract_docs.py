@@ -38,6 +38,19 @@ def test_install_ps1_uses_interactive_auto_init_contract() -> None:
     assert "docker exec -it openbiliclaw-backend openbiliclaw init" not in install_ps1
 
 
+def test_one_line_installers_default_to_lan_accessible_backend() -> None:
+    install_sh = _read("scripts/install.sh")
+    install_ps1 = _read("scripts/install.ps1")
+    bootstrap = _read("scripts/agent_bootstrap.py")
+
+    assert 'HOST="${HOST:-0.0.0.0}"' in install_sh
+    assert "HOST             API host  (default: 0.0.0.0)" in install_sh
+    assert "Backend bind address. Default: 0.0.0.0" in install_ps1
+    assert "if (-not $ApiHost)    { $ApiHost    = '0.0.0.0' }" in install_ps1
+    assert 'DEFAULT_HOST = "0.0.0.0"' in bootstrap
+    assert "default: 0.0.0.0" in bootstrap
+
+
 def test_docs_make_auto_init_primary_for_all_install_channels() -> None:
     readme = _read("README.md")
     docker_doc = _read("docs/docker-deployment.md")
@@ -71,9 +84,27 @@ def test_cli_module_docs_show_current_init_llm_menu() -> None:
     assert "请输入序号或名称（默认 1=DeepSeek） [1]:" in doc
     assert "1   本地 Ollama bge-m3 ★默认推荐" in doc
     assert "3   暂不启用 embedding" in doc
+    assert "不会跟随主 LLM" in doc
     assert "| 1 | 本地 Ollama，自动探测 + 拉取 `bge-m3` |" in doc
     assert "Ollama 排第一" not in doc
     assert "3   跟随你刚才选的 LLM" not in doc
     assert "1) 跟随你刚才选的 LLM" not in doc
     assert "跟随主 provider（默认）" not in doc
     assert "User picked OpenAI 官方 (option 2 in agent-install.md)" not in bootstrap
+
+
+def test_backend_tag_workflow_does_not_publish_backend_packages() -> None:
+    workflow = _read(".github/workflows/release-backend.yml")
+    docs_index = _read("docs/index.md")
+    extension_doc = _read("docs/modules/extension.md")
+
+    assert "backend-v*" in workflow
+    assert "Validate Backend Source Tag" in workflow
+    assert "Verify backend version matches source tag" in workflow
+    assert "softprops/action-gh-release" not in workflow
+    assert "upload-artifact" not in workflow
+    assert "Build backend release archive" not in workflow
+    assert "Publish backend release" not in workflow
+
+    assert "后端源码更新看 `backend-v*` tag，不发布后端桌面包" in docs_index
+    assert "后端桌面包不走 GitHub Release 分发" in extension_doc

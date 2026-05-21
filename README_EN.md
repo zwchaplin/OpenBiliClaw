@@ -17,8 +17,12 @@
 
 ---
 
-## 📌 v0.3.88 Highlights (2026-05-21)
+## 📌 v0.3.88 / extension v0.3.42 Highlights (2026-05-21)
 
+- **📱 Mobile Web is now a primary surface** — open `/m/` from a phone on the same LAN to view recommendations, profile, chat, messages, and delight candidates; the phone icon in the extension header now opens a scan-ready QR code.
+- **📶 QR codes now switch to the LAN IP automatically** — when the extension backend is still `127.0.0.1` / `localhost`, it reads `/api/health.lan_ip` and prefers phone-reachable `192.168.x.x` / `10.x.x.x` / `172.16-31.x.x` addresses.
+- **🖼️ Covers now load through the local proxy** — Mobile Web and the extension side panel route recommendation, delight, and message covers through `/api/image-proxy`, with backend CDN whitelist, redirect, and 10MB size guards plus stable fallback placeholders.
+- **✨ Mobile delight card refreshed** — the recommendation tab now shows delight candidates as a compact banner, with the reason wrapping around the left cover and actions aligned with the extension.
 - **🚫 LLM fallback off by default** — `[llm].fallback_enabled` defaults to `false`; failures surface immediately instead of silently switching providers.
 - **🚫 Embedding fallback off by default** — `[llm.embedding].fallback_enabled` defaults to `false`; no more borrowing chat-side credentials or falling through to other embedding providers.
 - **🔌 Embedding fully independent** — empty embedding provider means disabled, no longer follows `[llm].default_provider`; the two config surfaces are fully decoupled.
@@ -56,9 +60,32 @@ All data lives in a single SQLite file on your disk. LLM calls use your own API 
 > | Explains why | "Guess you'll like" | None | Friend-like explanations |
 > | Customizable | No | Low | Swap LLMs / edit profile / write Skills |
 
+## 📱 Mobile Web Preview
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-recommend.png" width="210" /><br/>
+      <b>Recommendations</b><br/>
+      <sub>Delight candidate · reason around cover</sub><br/>
+      <sub>View / like / not interested / chat</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-profile.png" width="210" /><br/>
+      <b>Profile</b><br/>
+      <sub>Core profile, interests, and cognition updates</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-chat.png" width="210" /><br/>
+      <b>Chat</b><br/>
+      <sub>Shared main chat history with the extension</sub>
+    </td>
+  </tr>
+</table>
+
 ## 🚀 Quick Start
 
-For most users, setup is three steps: install the extension, ask an AI coding agent to deploy the backend, then log in to the content platforms in the same browser.
+For most users, setup is four steps: install the extension, ask an AI coding agent to deploy the backend, log in to the content platforms in the same browser, and optionally open the Mobile Web app from your phone.
 
 ### 1. Install the browser extension
 
@@ -105,15 +132,31 @@ Paste this whole prompt into Claude Code, Codex CLI, Cursor, Windsurf, or anothe
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/agent-install.md to deploy the OpenBiliClaw backend for me (use Bash `curl` to fetch the document, NOT WebFetch — WebFetch summarises markdown and drops critical commands).
 ```
 
-The agent will clone the repo, install dependencies, start the backend, run a health check, and ask a few questions with defaults. If unsure, pick the default. Xiaohongshu, Douyin, and YouTube signals are used in the initial profile only when you explicitly opt in.
+The agent will clone the repo, install dependencies, start the backend with the LAN-accessible default bind (`0.0.0.0:8420`), run a health check, and ask a few questions with defaults. If unsure, pick the default. Xiaohongshu, Douyin, and YouTube signals are used in the initial profile only when you explicitly opt in.
 
 Once the local backend is started with `openbiliclaw start`, it also serves a standalone Web UI on the same port: open `http://127.0.0.1:8420/web` for a larger browser view of recommendations, profile, messages, chat, and settings. The root path `/` also redirects to `/web`. Note that: **The Web UI is just another better frontend, the backend still relies on the browser extension to sync cookies and so on.** The container/API-only `openbiliclaw serve-api` entrypoint does not serve the Web UI by default; pass `--with-web` when you explicitly want the page on that server.
 
-If the backend runs on another machine in your LAN, start it with `openbiliclaw start --host 0.0.0.0 --port 8420`, then set the extension's "Backend host" field to that machine's LAN IP, for example `192.168.1.100`.
+If the backend runs on another machine in your LAN, set the extension's "Backend host" field to that machine's LAN IP, for example `192.168.1.100`.
 
 ### 3. Log in to content platforms in the same browser
 
 At minimum, log in to [Bilibili](https://www.bilibili.com). OpenBiliClaw uses it to build the first profile and recommendations. If you want Xiaohongshu, Douyin, or YouTube, also log in to [Xiaohongshu](https://www.xiaohongshu.com) / [Douyin](https://www.douyin.com) / [YouTube](https://www.youtube.com) in the same browser where the extension is installed.
+
+### 4. Open Mobile Web on your phone
+
+Mobile Web is now one of the primary ways to use OpenBiliClaw. It is for checking recommendations, reading your profile, chatting with the agent, and handling interest probes or delight candidates from a phone. It only calls your local backend API; it does not sync cookies, crawl pages, or log in to platforms.
+
+The backend listens on `0.0.0.0` (all interfaces) by default, so phones on the same LAN can reach it immediately. Just start normally:
+
+```bash
+openbiliclaw start
+```
+
+Then click the phone icon in the extension header and scan the QR code — the extension auto-detects your computer's LAN IP, so the QR code just works. You can also type `http://<your-LAN-IP>:8420/m/` in your phone's browser manually.
+
+> During `openbiliclaw init`, you'll be asked whether to allow LAN access (default Y). If you chose N or want to change it later, edit `[api].host` in `config.toml` (`0.0.0.0` = LAN-reachable, `127.0.0.1` = local only).
+
+The app has three bottom tabs: Recommendations, Profile, and Chat. Recommendations support reshuffle, load more, like, not interested, comments, and contextual chat. Profile shows the core profile, interests, and cognition updates. Chat shares the main chat history with the extension.
 
 <details>
 <summary>No AI agent: run the one-line installer yourself</summary>
@@ -440,7 +483,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.87 / extension v0.3.38: runtime config now takes effect (2026-05-20)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md), with packages on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases).
+Latest: **v0.3.88 / extension v0.3.42: LAN QR and cover proxy integration release (2026-05-21)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
 
 ## 🗺️ Roadmap
 

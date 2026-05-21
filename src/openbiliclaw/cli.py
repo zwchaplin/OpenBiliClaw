@@ -155,6 +155,9 @@ _INIT_DISCOVERY_PLAN = [
 # ``scheduler.pool_target_count`` (600) over the following hour, so a
 # tiny init pool only delays diversity, never reduces it.
 _INIT_POOL_TARGET_COUNT = 15
+_INIT_BILIBILI_HISTORY_LIMIT = 300
+_INIT_BILIBILI_FAVORITE_LIMIT = 300
+_INIT_BILIBILI_FOLLOW_LIMIT = 300
 _DEFAULT_XHS_BOOTSTRAP_WAIT_SECONDS = 180.0
 _DEFAULT_DY_BOOTSTRAP_WAIT_SECONDS = 180.0
 _DEFAULT_YT_BOOTSTRAP_WAIT_SECONDS = 240.0
@@ -3114,20 +3117,27 @@ def logs_prune(
 
 @app.command()
 def start(
-    host: str = typer.Option("127.0.0.1", "--host", help="API 监听地址"),
-    port: int = typer.Option(8420, "--port", min=1, max=65535, help="API 监听端口"),
+    host: str = typer.Option("", "--host", help="API 监听地址（默认读 config.toml [api].host）"),
+    port: int = typer.Option(
+        0, "--port", min=0, max=65535, help="API 监听端口（默认读 config.toml [api].port）"
+    ),
 ) -> None:
     """启动 OpenBiliClaw Agent."""
+    from openbiliclaw.config import load_config
+
+    cfg = load_config()
+    effective_host = host if host else cfg.api.host
+    effective_port = port if port else cfg.api.port
     _print_page_title("启动 OpenBiliClaw", "本地 API 服务")
     _ensure_runtime_database_healthy()
     _print_status_panel(
         "info",
         "API 服务",
-        f"正在启动本地后端，当前监听 {host}:{port}。Web UI: http://{host}:{port}/web",
+        f"正在启动本地后端，当前监听 {effective_host}:{effective_port}。Web UI: http://{effective_host}:{effective_port}/web",
     )
     _warn_if_pause_on_disconnect_requires_presence()
     _maybe_create_runtime_database_backup()
-    _run_api_server(host=host, port=port, serve_webui=True)
+    _run_api_server(host=effective_host, port=effective_port, serve_webui=True)
 
 
 @app.command("serve-api")
@@ -3403,6 +3413,47 @@ def _ask_yt_inclusion() -> bool:
     return True
 
 
+def _ask_network_binding() -> bool:
+    """Ask whether the backend should listen on all interfaces (0.0.0.0).
+
+    Returns True if the user confirms all-interface binding, False for
+    localhost-only.  Non-interactive terminals default to True (the new
+    default keeps mobile web accessible).
+    """
+    if not _is_interactive_terminal():
+        return True
+
+    console.print()
+    console.print("[bold]📱 移动端访问[/bold]")
+    console.print(
+        "OpenBiliClaw 自带移动端 Web（[bold cyan]/m/[/bold cyan]），同一局域网的手机扫码即可打开。"
+    )
+    console.print()
+    console.print(
+        "为此，后端需要监听 [bold]0.0.0.0[/bold]（所有网卡），"
+        "这样手机才能连上来。\n"
+        "如果你只在本机使用、不需要手机端，选 N 会改为仅监听 127.0.0.1。"
+    )
+    console.print()
+    console.print("[dim]后续可在 config.toml 的 [api].host 随时切换。[/dim]")
+    console.print()
+    return typer.confirm("允许局域网设备访问（推荐）?", default=True)
+
+
+def _persist_api_host_choice(*, allow_lan: bool) -> None:
+    """Persist the user's network binding choice to config.toml."""
+    try:
+        from openbiliclaw.config import load_config, save_config
+
+        cfg = load_config()
+        target_host = "0.0.0.0" if allow_lan else "127.0.0.1"
+        if cfg.api.host != target_host:
+            cfg.api.host = target_host
+            save_config(cfg)
+    except Exception:
+        return
+
+
 def _persist_init_source_enabled_flags(
     *,
     include_xhs: bool,
@@ -3565,6 +3616,56 @@ def _format_source_shares(shares: Mapping[str, int]) -> str:
     return ", ".join(f"{labels.get(source, source)}={share}" for source, share in shares.items())
 
 
+def _normalize_init_bilibili_limit(value: int | None, *, default: int) -> int:
+    """Normalize user-facing init signal limits; 0 means skip that signal."""
+    if value is None:
+        return default
+    return max(0, int(value))
+
+
+def _ask_init_bilibili_limits(
+    *,
+    favorite_limit: int | None,
+    follow_limit: int | None,
+) -> tuple[int, int]:
+    """Ask interactive users to confirm Bilibili init signal caps."""
+    favorite = _normalize_init_bilibili_limit(
+        favorite_limit,
+        default=_INIT_BILIBILI_FAVORITE_LIMIT,
+    )
+    follow = _normalize_init_bilibili_limit(
+        follow_limit,
+        default=_INIT_BILIBILI_FOLLOW_LIMIT,
+    )
+    if not _is_interactive_terminal():
+        return favorite, follow
+    if favorite_limit is not None and follow_limit is not None:
+        return favorite, follow
+
+    console.print(
+        "\n[bold]B 站初始化信号上限[/bold]\n[dim]回车使用默认值；输入 0 可跳过对应信号。[/dim]"
+    )
+    if favorite_limit is None:
+        raw = typer.prompt(
+            "B 站收藏最多导入多少条",
+            default=str(_INIT_BILIBILI_FAVORITE_LIMIT),
+        )
+        try:
+            favorite = max(0, int(str(raw).strip()))
+        except ValueError:
+            favorite = _INIT_BILIBILI_FAVORITE_LIMIT
+    if follow_limit is None:
+        raw = typer.prompt(
+            "B 站关注 UP 最多导入多少人",
+            default=str(_INIT_BILIBILI_FOLLOW_LIMIT),
+        )
+        try:
+            follow = max(0, int(str(raw).strip()))
+        except ValueError:
+            follow = _INIT_BILIBILI_FOLLOW_LIMIT
+    return favorite, follow
+
+
 @app.command()
 def init(
     no_xhs: bool = typer.Option(
@@ -3596,6 +3697,18 @@ def init(
         False,
         "--yes-youtube",
         help="跳过 YouTube 的 y/n 提问,直接启用(适合脚本化场景)。",
+    ),
+    bilibili_favorite_limit: int | None = typer.Option(
+        None,
+        "--bilibili-favorite-limit",
+        min=0,
+        help="B 站收藏初始化信号上限；默认 300，0 表示跳过收藏。",
+    ),
+    bilibili_follow_limit: int | None = typer.Option(
+        None,
+        "--bilibili-follow-limit",
+        min=0,
+        help="B 站关注 UP 初始化信号上限；默认 300，0 表示跳过关注。",
     ),
 ) -> None:
     """首次运行：拉取历史、生成画像并补足首轮发现池."""
@@ -3631,27 +3744,32 @@ def init(
     # Init signal mix:
     #   - 300 most-recent watch history items (truncated; older history
     #     decays into noise quickly)
-    #   - the entire favorites set across every folder (high-signal user
-    #     curation; bigger folders are fine — they go through chunked
-    #     analyze_events anyway)
-    #   - the entire following list (high-signal subscription intent)
+    #   - up to 300 favorites across folders (high-signal user curation,
+    #     but too many low-recency saves dominate init cost)
+    #   - up to 300 followed creators (high-signal subscription intent)
+    resolved_bilibili_favorite_limit = _INIT_BILIBILI_FAVORITE_LIMIT
+    resolved_bilibili_follow_limit = _INIT_BILIBILI_FOLLOW_LIMIT
+
     async def _fetch_all_data() -> tuple[
         list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
     ]:
-        hist = await client.get_user_history(max_items=300)
+        hist = await client.get_user_history(max_items=_INIT_BILIBILI_HISTORY_LIMIT)
 
         favs: list[dict[str, Any]] = []
         try:
-            fav_folders = await client.get_all_favorites(
-                max_folders=200,
-                # ``2000`` is well above any realistic folder size — the
-                # API client itself stops paging when the folder is
-                # exhausted.
-                max_items_per_folder=2000,
+            fav_folders = (
+                await client.get_all_favorites(
+                    max_folders=200,
+                    max_items_per_folder=max(1, resolved_bilibili_favorite_limit),
+                )
+                if resolved_bilibili_favorite_limit > 0
+                else []
             )
             for folder in fav_folders:
                 folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
                 for item in folder.items if hasattr(folder, "items") else []:
+                    if len(favs) >= resolved_bilibili_favorite_limit:
+                        break
                     favs.append(
                         {
                             "title": getattr(item, "title", str(item)),
@@ -3659,6 +3777,8 @@ def init(
                             "folder": folder_title,
                         }
                     )
+                if len(favs) >= resolved_bilibili_favorite_limit:
+                    break
         except Exception as exc:
             console.print(f"  [yellow]收藏夹拉取失败: {exc}[/yellow]")
 
@@ -3666,11 +3786,13 @@ def init(
         try:
             page = 1
             page_size = 50
-            while True:
+            while len(follows) < resolved_bilibili_follow_limit:
                 page_users = await client.get_following(page=page, page_size=page_size)
                 if not page_users:
                     break
                 for user in page_users:
+                    if len(follows) >= resolved_bilibili_follow_limit:
+                        break
                     follows.append(
                         {
                             "name": getattr(user, "uname", str(user)),
@@ -3684,6 +3806,16 @@ def init(
             console.print(f"  [yellow]关注列表拉取失败: {exc}[/yellow]")
 
         return hist, favs, follows
+
+    # v0.3.89+: ask user whether the backend should be reachable from
+    # the local network (0.0.0.0) so mobile /m/ works out of the box.
+    allow_lan = _ask_network_binding()
+    _persist_api_host_choice(allow_lan=allow_lan)
+
+    resolved_bilibili_favorite_limit, resolved_bilibili_follow_limit = _ask_init_bilibili_limits(
+        favorite_limit=bilibili_favorite_limit,
+        follow_limit=bilibili_follow_limit,
+    )
 
     # v0.3.27+: ask the user whether to include xhs data, with a prep
     # checklist when they opt in. Defaults stay off unless the user

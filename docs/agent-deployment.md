@@ -97,8 +97,9 @@ python3 scripts/agent_bootstrap.py \
 | `--embedding-api-key KEY` | （v0.3.5+）自托管 embedding 网关的 API Key，会写到 `[llm.embedding].api_key`。 |
 | `--module-override MODULE=PROVIDER:MODEL` | （v0.3.5+，可重复）per-module LLM 覆盖。MODULE ∈ {soul, discovery, recommendation, evaluation}。例：`--module-override discovery=deepseek:deepseek-v4-flash`。 |
 | `--bilibili-cookie VALUE` | 直接写入 Bilibili Cookie，同时落盘到 `data/bilibili_cookie.json`。 |
-| `--interactive-confirm` | 人类直接运行 installer 时使用：bootstrap 会在终端里确认 embedding、B 站 Cookie 来源和 XHS / Douyin / YouTube opt-in。AI agent 通常自己问完用户后传显式参数。 |
+| `--interactive-confirm` | 人类直接运行 installer 时使用：bootstrap 会在终端里确认 embedding、B 站初始化收藏 / 关注上限、B 站 Cookie 来源和 XHS / Douyin / YouTube opt-in。AI agent 通常自己问完用户后传显式参数。 |
 | `--wait-for-extension-cookie` | 缺 B 站 Cookie 且用户选择浏览器扩展同步时，后端健康后等待扩展把 Cookie 推到 `/api/bilibili/cookie`，同步后继续自动 init。 |
+| `--bilibili-favorite-limit N` / `--bilibili-follow-limit N` | auto-init 传给 `openbiliclaw init` 的 B 站收藏 / 关注信号上限；默认各 300，`0` 表示跳过对应信号。 |
 | `--yes-xhs` / `--no-xhs` | （v0.3.30+）auto-init 前的小红书数据决策。`--yes-xhs` 仅在用户明确同意把小红书收藏 / 点赞混进画像时传；其他情况传 `--no-xhs`。不传则 bootstrap 返回 `needs_decisions`，不会跑 init。 |
 | `--yes-douyin` / `--no-douyin` | （v0.3.67+）auto-init 前的抖音数据决策。`--yes-douyin` 仅在用户明确同意把抖音发布 / 收藏 / 点赞 / 关注混进画像时传；其他情况传 `--no-douyin`。不传则 bootstrap 返回 `needs_decisions`，不会跑 init。 |
 | `--yes-youtube` / `--no-youtube` | auto-init 前的 YouTube 数据决策。`--yes-youtube` 仅在用户明确同意把 YouTube 观看历史 / 订阅 / 点赞混进画像时传；其他情况传 `--no-youtube`。不传则 bootstrap 返回 `needs_decisions`，不会跑 init。 |
@@ -179,6 +180,8 @@ docker exec -it openbiliclaw-backend openbiliclaw config-show
 
 **v0.3.7 之前**：`init` 是「部署后可选」步骤，需要你手动触发。
 **v0.3.7+ 改了**：当凭据齐全（`config_summary.missing == []`）+ 后端健康（`backend_healthy`）后，`agent_bootstrap.py` 会自动调用 `openbiliclaw init`，把推荐链路真正接通。
+
+auto-init 会把 B 站初始化收藏 / 关注上限传给 `openbiliclaw init`；默认各 300，AI agent 可在用户明确要求时传 `--bilibili-favorite-limit N` / `--bilibili-follow-limit N` 调整。
 
 **v0.3.30+ 又加了一道隐私 / 质量决策门槛，v0.3.67+ 增加抖音同意项，当前也要求 YouTube 同意项**：auto-init 只会在
 embedding 选择已显式传入（例如 `--embedding-provider ollama
