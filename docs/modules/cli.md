@@ -306,6 +306,8 @@ $ openbiliclaw profile
 
 安装渠道里的首选路径是 `scripts/agent_bootstrap.py` 自动运行 init：Bash / PowerShell / Docker / AI agent 安装会先确认 LLM、embedding、B 站 Cookie 和各来源 opt-in，再触发本命令。直接执行 `openbiliclaw init` 仍保留为高级手动 fallback 和重复初始化入口。
 
+默认初始化信号上限：B 站观看历史最多 300 条、收藏最多 300 条、关注 UP 最多 300 人；小红书 / 抖音 / YouTube 仍按各自 `bootstrap_profile` 的 `max_items_per_scope` 控制。交互式 `init` 会让用户确认 B 站收藏 / 关注上限，回车使用 300；脚本化场景可传 `--bilibili-favorite-limit N` / `--bilibili-follow-limit N`，传 `0` 表示跳过对应信号。
+
 ```bash
 $ openbiliclaw init
 初始化 OpenBiliClaw
@@ -346,6 +348,7 @@ YouTube 导入依赖浏览器插件在用户已登录的 `https://www.youtube.co
 - `--yes-xhs` / `--no-xhs`：跳过小红书交互式提问，直接启用或跳过。
 - `--yes-douyin` / `--no-douyin`：跳过抖音交互式提问，直接启用或跳过。非交互式终端默认跳过抖音，脚本化 init 应显式传其中一个。
 - `--yes-youtube` / `--no-youtube`：跳过 YouTube 交互式提问，直接启用或跳过。非交互式终端默认跳过 YouTube，脚本化 init 应显式传其中一个。
+- `--bilibili-favorite-limit N` / `--bilibili-follow-limit N`：覆盖 B 站收藏 / 关注初始化信号上限，默认各 `300`；`0` 表示跳过对应信号。
 - `OPENBILICLAW_NO_XHS=1` / `OPENBILICLAW_NO_DOUYIN=1` / `OPENBILICLAW_NO_YOUTUBE=1`：永久跳过对应源。
 - `OPENBILICLAW_XHS_BOOTSTRAP_DEDUPE_HOURS`：小红书 `bootstrap_profile` 近期任务复用窗口，默认 `6` 小时；设为 `0` 可关闭复用。
 - `OPENBILICLAW_DY_BOOTSTRAP_DEDUPE_HOURS` / `OPENBILICLAW_YT_BOOTSTRAP_DEDUPE_HOURS`：抖音 / YouTube `bootstrap_profile` 近期任务复用窗口，默认 `6` 小时；设为 `0` 可关闭复用。

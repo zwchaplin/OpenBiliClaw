@@ -522,7 +522,27 @@ uv run openbiliclaw init                                  # local + uv
 and source flags from the user's answers — bootstrap auto-runs
 init once everything's present.
 
-### Step 5 — Source data opt-in
+### Step 5 — Bilibili init signal limits
+
+Before any non-interactive auto-init, confirm:
+
+> 「B 站初始化默认导入最近 300 条观看历史、最多 300 条收藏、最多 300 个关注 UP。
+> 历史保持 300；收藏和关注要改上限吗？直接回车就是 300，填 0 就跳过对应信号。」
+
+Map answers to:
+
+| 项 | 用户回答 | 命令行参数 |
+|---|---|---|
+| 收藏上限 | 回车 / 不确定 | 省略或 `--bilibili-favorite-limit 300` |
+| 收藏上限 | 数字 N | `--bilibili-favorite-limit N` |
+| 关注上限 | 回车 / 不确定 | 省略或 `--bilibili-follow-limit 300` |
+| 关注上限 | 数字 N | `--bilibili-follow-limit N` |
+
+Human-run `install.sh` / `install.ps1` pass `--interactive-confirm`, so
+`agent_bootstrap.py` will ask these two numbers directly and pass them into
+`openbiliclaw init`.
+
+### Step 6 — Source data opt-in
 
 Before any non-interactive auto-init, ask:
 
@@ -673,7 +693,12 @@ also emits `BOOTSTRAP_STATUS` events with `status=progress` and
 `4/4`, discovery refill progress). AI agents must relay those progress
 events to the user instead of staying silent until `init_complete`.
 
-### Init 期间会问用户:小红书 / 抖音 / YouTube 数据是否加入
+### Init 期间会问用户:B 站上限与小红书 / 抖音 / YouTube 数据是否加入
+
+`openbiliclaw init` 在拉 B 站数据前会确认 B 站收藏 / 关注初始化上限：
+默认收藏最多 300 条、关注 UP 最多 300 人；用户直接回车即接受默认，输入
+自定义数字会透传到 `--bilibili-favorite-limit` / `--bilibili-follow-limit`，
+输入 `0` 可跳过对应信号。
 
 `openbiliclaw init` 在拉 B 站数据**之前**会弹一个交互式问题:是否把
 小红书的收藏 / 点赞混进画像。三种状态:

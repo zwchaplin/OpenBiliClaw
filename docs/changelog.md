@@ -8,6 +8,7 @@
 
 - 浏览器插件版本提升到 extension v0.3.42，合入 extension v0.3.41 的封面代理发布内容，并补齐 main 上的移动端二维码局域网 IP 自动检测逻辑；当插件后端仍配置为 `127.0.0.1` / `localhost` 时，会读取 `/api/health.lan_ip` 生成手机可访问的 `/m/` 二维码。
 - 一句话安装和 agent bootstrap 默认绑定 `0.0.0.0:8420`，健康检查仍使用 `127.0.0.1` URL；`/api/health.lan_ip` 优先返回 RFC1918 网卡地址并排除 `198.18.0.0/15` VPN / TUN 地址，避免二维码显示手机不可达 IP。
+- `openbiliclaw init` 的 B 站收藏和关注初始化信号默认各限制为 300 条 / 人，并新增 `--bilibili-favorite-limit` / `--bilibili-follow-limit` 覆盖项；人类安装流程的 `agent_bootstrap.py --interactive-confirm` 会让用户确认这两个上限后再自动 init，避免大收藏夹和长关注列表把初始画像事件量拉得过高；B 站观看历史仍保持 300 条。
 
 ---
 

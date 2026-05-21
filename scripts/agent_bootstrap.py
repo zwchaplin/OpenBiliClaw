@@ -64,6 +64,8 @@ HEALTH_POLL_INTERVAL = 2.0
 LOCAL_NO_PROXY_HOSTS = ("localhost", "127.0.0.1", "::1")
 DOCKER_CONTAINER_NAME = "openbiliclaw-backend"
 DOCKER_RUNTIME_ROOT = "/app/runtime"
+DEFAULT_BILIBILI_FAVORITE_LIMIT = 300
+DEFAULT_BILIBILI_FOLLOW_LIMIT = 300
 
 SUPPORTED_PROVIDERS = ("openai", "claude", "gemini", "deepseek", "ollama", "openrouter")
 REMOTE_PROVIDERS = ("openai", "claude", "gemini", "deepseek", "openrouter")
@@ -163,6 +165,8 @@ class InitConfirmationAnswers:
     douyin: bool
     youtube: bool
     cookie_mode: str
+    bilibili_favorite_limit: int = DEFAULT_BILIBILI_FAVORITE_LIMIT
+    bilibili_follow_limit: int = DEFAULT_BILIBILI_FOLLOW_LIMIT
     bilibili_cookie: str = ""
 
 
@@ -196,6 +200,10 @@ def confirmation_answers_to_bootstrap_args(answers: InitConfirmationAnswers) -> 
         "--yes-xhs" if answers.xhs else "--no-xhs",
         "--yes-douyin" if answers.douyin else "--no-douyin",
         "--yes-youtube" if answers.youtube else "--no-youtube",
+        "--bilibili-favorite-limit",
+        str(max(0, int(answers.bilibili_favorite_limit))),
+        "--bilibili-follow-limit",
+        str(max(0, int(answers.bilibili_follow_limit))),
     ]
     if answers.cookie_mode == "manual" and answers.bilibili_cookie:
         args.extend(["--bilibili-cookie", answers.bilibili_cookie])
@@ -215,6 +223,21 @@ def _ask_yes_no(
     return raw in {"y", "yes", "1", "true", "是", "好", "同意"}
 
 
+def _ask_non_negative_int(
+    input_func: Any,
+    prompt: str,
+    *,
+    default: int,
+) -> int:
+    raw = str(input_func(f"{prompt} [{default}]: ")).strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
 def collect_interactive_confirmations(input_func: Any | None = input) -> InitConfirmationAnswers:
     """Ask the user for init decisions in human-run installer flows."""
 
@@ -229,9 +252,23 @@ def collect_interactive_confirmations(input_func: Any | None = input) -> InitCon
     ).strip()
     embedding_provider = embedding_choice or "ollama"
     model_default = "bge-m3" if embedding_provider == "ollama" else ""
-    embedding_model = str(
-        input_func(f"Embedding model [{model_default}] (enter to accept default): ")
-    ).strip() or model_default
+    embedding_model = (
+        str(input_func(f"Embedding model [{model_default}] (enter to accept default): ")).strip()
+        or model_default
+    )
+
+    print("")
+    print("Bilibili init signal limits default to 300 each; enter 0 to skip one signal.")
+    bilibili_favorite_limit = _ask_non_negative_int(
+        input_func,
+        "Max Bilibili favorites to import during init",
+        default=DEFAULT_BILIBILI_FAVORITE_LIMIT,
+    )
+    bilibili_follow_limit = _ask_non_negative_int(
+        input_func,
+        "Max Bilibili followed creators to import during init",
+        default=DEFAULT_BILIBILI_FOLLOW_LIMIT,
+    )
 
     print("")
     print("Optional source data is disabled by default unless you explicitly opt in.")
@@ -253,9 +290,11 @@ def collect_interactive_confirmations(input_func: Any | None = input) -> InitCon
 
     print("")
     print("Bilibili auth default: browser extension sync.")
-    cookie_mode_raw = str(
-        input_func("Bilibili cookie source: extension/manual/existing [extension]: ")
-    ).strip().lower()
+    cookie_mode_raw = (
+        str(input_func("Bilibili cookie source: extension/manual/existing [extension]: "))
+        .strip()
+        .lower()
+    )
     cookie_mode = cookie_mode_raw or "extension"
     bilibili_cookie = ""
     if cookie_mode == "manual":
@@ -270,6 +309,8 @@ def collect_interactive_confirmations(input_func: Any | None = input) -> InitCon
         douyin=douyin,
         youtube=youtube,
         cookie_mode=cookie_mode,
+        bilibili_favorite_limit=bilibili_favorite_limit,
+        bilibili_follow_limit=bilibili_follow_limit,
         bilibili_cookie=bilibili_cookie,
     )
 
@@ -293,6 +334,10 @@ def apply_confirmation_answers_to_args(
     if not args.yes_youtube and not args.no_youtube:
         args.yes_youtube = answers.youtube
         args.no_youtube = not answers.youtube
+    if args.bilibili_favorite_limit is None:
+        args.bilibili_favorite_limit = answers.bilibili_favorite_limit
+    if args.bilibili_follow_limit is None:
+        args.bilibili_follow_limit = answers.bilibili_follow_limit
     if answers.cookie_mode == "manual" and answers.bilibili_cookie and not args.bilibili_cookie:
         args.bilibili_cookie = answers.bilibili_cookie
     if answers.cookie_mode == "extension":
@@ -427,6 +472,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--bilibili-cookie",
         default=None,
         help="Bilibili cookie string. Stored in config.toml and data/bilibili_cookie.json.",
+    )
+    parser.add_argument(
+        "--bilibili-favorite-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max Bilibili favorite events imported by auto-init. "
+            "Default is openbiliclaw init's built-in 300; 0 skips favorites."
+        ),
+    )
+    parser.add_argument(
+        "--bilibili-follow-limit",
+        type=int,
+        default=None,
+        help=(
+            "Max Bilibili follow events imported by auto-init. "
+            "Default is openbiliclaw init's built-in 300; 0 skips follows."
+        ),
     )
     xhs_group = parser.add_mutually_exclusive_group()
     xhs_group.add_argument(
@@ -1460,6 +1523,9 @@ def build_init_command(
     xhs_flag: str,
     douyin_flag: str,
     youtube_flag: str,
+    *,
+    bilibili_favorite_limit: int | None = None,
+    bilibili_follow_limit: int | None = None,
 ) -> list[str]:
     """Build the non-interactive init command used after bootstrap health checks."""
 
@@ -1490,6 +1556,20 @@ def build_init_command(
         init_cmd.append(douyin_flag)
     if youtube_flag:
         init_cmd.append(youtube_flag)
+    if bilibili_favorite_limit is not None:
+        init_cmd.extend(
+            [
+                "--bilibili-favorite-limit",
+                str(max(0, int(bilibili_favorite_limit))),
+            ]
+        )
+    if bilibili_follow_limit is not None:
+        init_cmd.extend(
+            [
+                "--bilibili-follow-limit",
+                str(max(0, int(bilibili_follow_limit))),
+            ]
+        )
     return init_cmd
 
 
@@ -2203,7 +2283,13 @@ def run(args: argparse.Namespace) -> int:
                 douyin_flag = str(init_decisions["douyin"]["flag"])
                 youtube_flag = str(init_decisions["youtube"]["flag"])
                 init_cmd = build_init_command(
-                    mode, project_dir, xhs_flag, douyin_flag, youtube_flag
+                    mode,
+                    project_dir,
+                    xhs_flag,
+                    douyin_flag,
+                    youtube_flag,
+                    bilibili_favorite_limit=args.bilibili_favorite_limit,
+                    bilibili_follow_limit=args.bilibili_follow_limit,
                 )
                 init_returncode = run_init_streaming(init_cmd, cwd=project_dir, check=False)
                 if init_returncode != 0:

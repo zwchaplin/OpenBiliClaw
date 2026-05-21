@@ -157,10 +157,25 @@ def test_apply_embedding_config_writes_embedding_owned_credentials(tmp_path: Pat
 
 def test_build_init_command_appends_all_source_flags_for_local(tmp_path: Path) -> None:
     command = bootstrap.build_init_command(
-        "local", tmp_path, "--no-xhs", "--no-douyin", "--yes-youtube"
+        "local",
+        tmp_path,
+        "--no-xhs",
+        "--no-douyin",
+        "--yes-youtube",
+        bilibili_favorite_limit=120,
+        bilibili_follow_limit=80,
     )
 
-    assert command[-4:] == ["init", "--no-xhs", "--no-douyin", "--yes-youtube"]
+    assert command[-8:] == [
+        "init",
+        "--no-xhs",
+        "--no-douyin",
+        "--yes-youtube",
+        "--bilibili-favorite-limit",
+        "120",
+        "--bilibili-follow-limit",
+        "80",
+    ]
 
 
 def test_interactive_answers_apply_source_flags() -> None:
@@ -172,6 +187,8 @@ def test_interactive_answers_apply_source_flags() -> None:
         youtube=False,
         cookie_mode="manual",
         bilibili_cookie="SESSDATA=test; bili_jct=test; DedeUserID=1",
+        bilibili_favorite_limit=120,
+        bilibili_follow_limit=80,
     )
 
     argv = bootstrap.confirmation_answers_to_bootstrap_args(answers)
@@ -184,9 +201,29 @@ def test_interactive_answers_apply_source_flags() -> None:
         "--no-xhs",
         "--yes-douyin",
         "--no-youtube",
+        "--bilibili-favorite-limit",
+        "120",
+        "--bilibili-follow-limit",
+        "80",
         "--bilibili-cookie",
         "SESSDATA=test; bili_jct=test; DedeUserID=1",
     ]
+
+
+def test_collect_interactive_confirmations_collects_bilibili_limits() -> None:
+    inputs = iter(["", "", "120", "80", "n", "y", "n", "manual", "SESSDATA=test"])
+
+    answers = bootstrap.collect_interactive_confirmations(input_func=lambda _prompt: next(inputs))
+
+    assert answers.embedding_provider == "ollama"
+    assert answers.embedding_model == "bge-m3"
+    assert answers.bilibili_favorite_limit == 120
+    assert answers.bilibili_follow_limit == 80
+    assert answers.xhs is False
+    assert answers.douyin is True
+    assert answers.youtube is False
+    assert answers.cookie_mode == "manual"
+    assert answers.bilibili_cookie == "SESSDATA=test"
 
 
 def test_collect_interactive_confirmations_requires_input_func() -> None:
@@ -257,7 +294,13 @@ def test_docker_secret_detector_command_reads_runtime_config() -> None:
 
 def test_build_init_command_appends_explicit_source_flags_for_docker(tmp_path: Path) -> None:
     command = bootstrap.build_init_command(
-        "docker", tmp_path, "--yes-xhs", "--yes-douyin", "--no-youtube"
+        "docker",
+        tmp_path,
+        "--yes-xhs",
+        "--yes-douyin",
+        "--no-youtube",
+        bilibili_favorite_limit=120,
+        bilibili_follow_limit=80,
     )
 
     assert command == [
@@ -270,6 +313,10 @@ def test_build_init_command_appends_explicit_source_flags_for_docker(tmp_path: P
         "--yes-xhs",
         "--yes-douyin",
         "--no-youtube",
+        "--bilibili-favorite-limit",
+        "120",
+        "--bilibili-follow-limit",
+        "80",
     ]
 
 
