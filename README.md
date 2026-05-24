@@ -27,7 +27,7 @@
 
 ---
 
-## 📌 v0.3.90 / extension v0.3.46 重要更新（2026-05-24）
+## 📌 v0.3.91 / extension v0.3.47 重要更新（2026-05-24）
 
 - **🔢 真实可换库存** —— 插件、移动端 Web 和桌面 Web 的“可换”数字现在只统计后端当前能立即 `serve()` 的候选。
 - **🧰 素材整理态分离** —— 已发现但还缺文案、分类或可跳转链接的内容会显示为“正在整理”，不再误写成“还有 N 条可换”。
@@ -576,7 +576,7 @@ OpenBiliClaw/
 
 ## 📜 更新日志
 
-最新版本：**v0.3.90 / extension v0.3.46: 真实可换库存口径修正（2026-05-24）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)。插件包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)，后端源码更新看 `backend-v*` tag，不发布后端桌面包。
+最新版本：**v0.3.91 / extension v0.3.47: 真实可换库存口径修正（2026-05-24）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)。插件包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)，后端源码更新看 `backend-v*` tag，不发布后端桌面包。
 
 ## 🗺️ 后续规划
 

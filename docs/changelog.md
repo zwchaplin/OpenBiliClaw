@@ -4,7 +4,7 @@
 
 ---
 
-## v0.3.90 / extension v0.3.46: 真实可换库存口径修正（2026-05-24）
+## v0.3.91 / extension v0.3.47: 真实可换库存口径修正（2026-05-24）
 
 - 修复 runtime status / runtime stream 的候选池数字口径：`pool_available_count` 现在只表示后端当前可立即 `serve()` 的候选；新增 `pool_raw_count` / `pool_pending_count` 用于区分素材库存和待整理内容，避免“池子有素材”被显示成“还有 N 条可换”。
 - `count_pool_candidates()` 读取前会刷新 SQLite/WAL snapshot，避免同一次操作里 runtime status 看到旧库存、`get_pool_candidates()` 看到新状态而返回空。

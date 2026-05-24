@@ -17,7 +17,7 @@
 
 ---
 
-## 📌 v0.3.90 / extension v0.3.46 Highlights (2026-05-24)
+## 📌 v0.3.91 / extension v0.3.47 Highlights (2026-05-24)
 
 - **🔢 True reshuffle inventory** — the extension, Mobile Web, and Desktop Web now show "available" only for candidates the backend can immediately `serve()`.
 - **🧰 Pending material is separate** — discovered items that still need copy, classification, or a linkable URL are shown as "being prepared" instead of "N available".
@@ -505,7 +505,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.90 / extension v0.3.46: true reshuffle inventory counts (2026-05-24)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
+Latest: **v0.3.91 / extension v0.3.47: true reshuffle inventory counts (2026-05-24)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
 
 ## 🗺️ Roadmap
 
