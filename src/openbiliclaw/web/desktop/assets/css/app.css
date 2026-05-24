@@ -157,11 +157,11 @@
     .side-drawer-btn svg { width: 20px; height: 20px; stroke-width: 2; }
     .side-drawer { position: fixed; inset: var(--topbar-height) auto 0 0; z-index: 15; width: var(--side-drawer-width); pointer-events: none; }
     .side-drawer-scrim { display: none; }
-    .side-drawer-panel { width: var(--side-drawer-width); height: 100%; display: grid; align-content: start; gap: var(--space-4); padding: 18px var(--space-4); overflow: auto; background: var(--bg); color: var(--fg); border-right: 1px solid var(--border-soft); box-shadow: 1px 0 0 var(--border); transform: translateX(-100%); transition: transform var(--motion-base) var(--ease-standard); pointer-events: auto; }
+    .side-drawer-panel { width: var(--side-drawer-width); height: 100%; display: grid; align-content: start; gap: 0; padding: 18px var(--space-4); overflow: auto; background: var(--bg); color: var(--fg); border-right: 1px solid var(--border-soft); box-shadow: 1px 0 0 var(--border); transform: translateX(-100%); transition: transform var(--motion-base) var(--ease-standard); pointer-events: auto; }
     .side-drawer.is-open .side-drawer-panel { transform: translateX(0); }
     body.side-drawer-open .layout,
     body.side-drawer-open .fatal-banner { transform: translateX(calc(var(--side-drawer-width) / 2)); }
-    .side-drawer-nav { display: grid; gap: 4px; padding: var(--space-2) 0; border-bottom: 1px solid var(--border-soft); }
+    .side-drawer-nav { display: grid; gap: 4px; padding: 0 0 var(--space-3); border-bottom: 1px solid var(--border-soft); }
     .side-drawer-nav .nav-action { width: 100%; min-height: 40px; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--fg-2); box-shadow: none; text-align: left; }
     .side-drawer-nav .nav-action:hover { background: color-mix(in oklab, var(--surface-warm), var(--accent) 6%); color: var(--fg); }
     .nav-glyph { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: var(--radius-sm); background: var(--surface-warm); color: var(--fg-2); font-size: 13px; }
