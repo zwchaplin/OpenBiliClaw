@@ -123,7 +123,7 @@
     }
 
     const DISMISS_ON_RESHUFFLE_KEY = "openbiliclaw.dismissOnReshuffle";
-    state.dismissOnReshuffle = storageGet(DISMISS_ON_RESHUFFLE_KEY) === "1";
+    state.dismissOnReshuffle = storageGet(DISMISS_ON_RESHUFFLE_KEY) !== "0";
     const SIDE_DRAWER_OPEN_KEY = "openbiliclaw.sideDrawerOpen";
 
     function normalizeBackendHost(host) {
