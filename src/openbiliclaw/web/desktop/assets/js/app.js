@@ -18,6 +18,7 @@
       click: "/recommendation-click",
       chatTurns: "/chat/turns",
       interestProbeRespond: "/interest-probes/respond",
+      avoidanceProbeRespond: "/avoidance-probes/respond",
       sourceShareSuggestion: "/config/source-share-suggestion",
       config: "/config?reveal_keys=true"
     };
@@ -52,10 +53,12 @@
       messageListDomLocked: false,
       resolvingMessageKeys: new Set(),
       resolvedMessageResults: new Map(),
-      handledProbeDomains: new Set(),
+      handledProbeKeys: new Set(),
       messageScrollTop: 0,
       messageChatDomain: "",
       messageChatPrompt: "",
+      messageChatScope: "probe",
+      messageChatSubjectTitle: "",
       chat: [
         { role: "agent", text: "你可以直接告诉我最近想多看什么、少看什么，或者评价一条推荐为什么准/不准。" }
       ]
@@ -365,6 +368,7 @@
       closeMobileMenu();
       if (id === "messagesDrawer") {
         hydrateInboxFromSpeculations(state.profile?.speculative_interests);
+        hydrateInboxFromSpeculations(state.profile?.speculative_avoidances, "avoidance.probe");
         state.messageListSnapshot = getRenderableMessages();
         returnToMessages();
         renderMessages();
@@ -920,13 +924,15 @@
       return rows ? `<div class="profile-context">${rows}</div>` : paragraphsHtml("", "使用场景还在继续观察。");
     }
 
-    function speculativeHtml(items) {
+    function speculativeHtml(items, options = {}) {
+      const isAvoidance = options.kind === "avoidance";
       const list = asArray(items);
-      if (!list.length) return `<p class="video-meta">阿B 还没有正在试探的新方向。</p>`;
+      if (!list.length) return `<p class="video-meta">${isAvoidance ? "阿B 暂时没有待确认的避雷方向。" : "阿B 还没有正在试探的新方向。"}</p>`;
       const statusLabels = { active: "待确认", pending: "待观察", confirmed: "已确认", deprecated: "已弃", rejected: "已排除" };
+      const fallbackTitle = isAvoidance ? "猜测避雷" : "猜测兴趣";
       return `<div class="speculative-list">${list.map((item) => {
         if (typeof item !== "object") return `<div class="speculative-item"><div class="spec-header"><span class="spec-domain">${escapeHtml(item)}</span></div></div>`;
-        const domain = item.domain || item.name || item.title || "猜测兴趣";
+        const domain = item.domain || item.name || item.title || fallbackTitle;
         const status = item.status || "active";
         const count = Number(item.confirmation_count ?? 0);
         const threshold = Number(item.confirmation_threshold ?? 3);
@@ -945,8 +951,8 @@
           ${confidence > 0 ? `<div class="spec-confidence-row"><div class="spec-confidence-bar"><div class="spec-confidence-fill" style="width:${Math.round(confidence * 100)}%"></div></div><span class="spec-confidence-label">置信度 ${Math.round(confidence * 100)}%</span></div>` : ""}
           ${item.reason ? `<p class="video-meta">${escapeHtml(item.reason)}</p>` : ""}
           ${specifics.length ? `<div class="spec-specifics">${specifics.map((s) => `<span class="spec-specific-chip">${escapeHtml(s.name)}${s.count > 0 ? `<span class="spec-specific-count">${s.count}</span>` : ""}</span>`).join("")}</div>` : ""}
-          <p class="spec-help">置信度表示阿B认为你会喜欢这个方向的把握；确认次数来自后端累计的正向确认信号（包括但不限于这里的“喜欢”），达到 ${threshold} 次后会进入更稳定的兴趣画像。</p>
-          ${status === "active" && domain ? `<div class="spec-actions"><button class="probe-btn is-confirm" type="button" data-spec-response="confirm">喜欢</button><button class="probe-btn is-reject" type="button" data-spec-response="reject">不喜欢</button></div>` : ""}
+          <p class="spec-help">${isAvoidance ? `置信度表示阿B认为你会避开这个方向的把握；确认次数来自后端累计的避雷确认信号，达到 ${threshold} 次后会进入更稳定的避雷画像。` : `置信度表示阿B认为你会喜欢这个方向的把握；确认次数来自后端累计的正向确认信号（包括但不限于这里的“喜欢”），达到 ${threshold} 次后会进入更稳定的兴趣画像。`}</p>
+          ${status === "active" && domain ? `<div class="spec-actions"><button class="probe-btn is-confirm" type="button" data-spec-response="confirm" data-spec-type="${isAvoidance ? "avoidance.probe" : "interest.probe"}">${isAvoidance ? "确实不喜欢" : "喜欢"}</button><button class="probe-btn is-reject" type="button" data-spec-response="reject" data-spec-type="${isAvoidance ? "avoidance.probe" : "interest.probe"}">${isAvoidance ? "不是" : "不喜欢"}</button></div>` : ""}
         </div>`;
       }).join("")}</div>`;
     }
@@ -1029,6 +1035,7 @@
         ]),
         profileLayer("Speculate — 阿B 在试探的方向", [
           profileItem("猜测兴趣", speculativeHtml(profile.speculative_interests)),
+          profileItem("猜测避雷", speculativeHtml(profile.speculative_avoidances, { kind: "avoidance" })),
           profileItem("阿B 最近新记住了什么", memoryHtml(firstValue(profile.recent_cognition_updates, profile.recent_memories)))
         ]),
         profileLayer("Signals — 正在推断中", [
@@ -1064,7 +1071,16 @@
     }
 
     function messageType(msg) {
-      return msg?.type === "probe" ? "interest.probe" : (msg?.type || "interest.probe");
+      const type = msg?.type === "probe" ? "interest.probe" : (msg?.type || "interest.probe");
+      return type === "avoidance" ? "avoidance.probe" : type;
+    }
+
+    function isAvoidanceProbe(type) {
+      return messageType({ type }) === "avoidance.probe";
+    }
+
+    function probeKey(type, domain) {
+      return `${messageType({ type })}:${String(domain || "")}`;
     }
 
     function messageKey(msg) {
@@ -1092,10 +1108,11 @@
       }
       const domain = item.domain || item.name || item.title;
       if (!domain) return null;
+      const probeType = type === "avoidance.probe" || item.kind === "avoidance" ? "avoidance.probe" : "interest.probe";
       return {
-        type: "interest.probe",
+        type: probeType,
         domain: String(domain),
-        reason: item.reason || item.message || item.description || "后端希望确认这个兴趣方向。",
+        reason: item.reason || item.message || item.description || (probeType === "avoidance.probe" ? "后端希望确认这个避雷方向。" : "后端希望确认这个兴趣方向。"),
         specifics: asArray(item.specifics || item.examples || item.children).map((s) => s?.name || s?.label || valueList(s)).filter(Boolean),
         chat_status: item.chat_status || item.status_text || "",
         chat_reply: item.chat_reply || item.reply || ""
@@ -1132,24 +1149,25 @@
       return Boolean($("#messagesDrawer")?.classList.contains("is-open"));
     }
 
-    function hydrateInboxFromSpeculations(speculations) {
+    function hydrateInboxFromSpeculations(speculations, type = "interest.probe") {
       if (speculations == null || speculations === "") return;
+      const normalizedType = messageType({ type });
       const items = asArray(speculations);
       const active = items.filter((item) => item && item.domain && (!item.status || item.status === "active"));
       const activeDomains = new Set(active.map((item) => String(item.domain)));
       const preserveCurrentProbeList = isMessagesDrawerOpen();
       state.messages = state.messages.filter((msg) => {
-        if (messageType(msg) !== "interest.probe") return true;
+        if (messageType(msg) !== normalizedType) return true;
         const domain = String(msg.domain || "");
-        if (!domain || state.handledProbeDomains.has(domain)) return false;
+        if (!domain || state.handledProbeKeys.has(probeKey(normalizedType, domain))) return false;
         if (state.resolvingMessageKeys.has(messageKey(msg))) return true;
         return preserveCurrentProbeList || activeDomains.has(domain);
       });
-      const existing = new Set(state.messages.filter((msg) => messageType(msg) === "interest.probe").map((msg) => String(msg.domain || "")));
+      const existing = new Set(state.messages.filter((msg) => messageType(msg) === normalizedType).map((msg) => String(msg.domain || "")));
       for (const item of active) {
         const domain = String(item.domain);
-        if (state.handledProbeDomains.has(domain) || existing.has(domain)) continue;
-        state.messages.push(normalizeMessageItem(item));
+        if (state.handledProbeKeys.has(probeKey(normalizedType, domain)) || existing.has(domain)) continue;
+        state.messages.push(normalizeMessageItem({ ...item, type: normalizedType }));
         existing.add(domain);
       }
       syncMessageCount();
@@ -1187,7 +1205,12 @@
           el.innerHTML = `<p class="eyebrow">待通知候选</p><h3>${escapeHtml(msg.title)}</h3><p class="video-meta">${escapeHtml(msg.reason)}</p><div class="message-note">这类消息来自后端挑出的高置信推荐，用于插件通知；标记已通知后不会反复出现。</div><div class="message-card-actions"><div class="card-feedback-icons" aria-label="通知候选状态"><button class="feedback-icon-btn" data-notification-msg="dismiss" type="button" aria-label="标记已通知" title="标记已通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button></div><div class="message-primary-actions"><button class="small-btn" data-notification-msg="view">去看看</button></div></div>`;
           el.querySelectorAll("[data-notification-msg]").forEach((btn) => btn.addEventListener("click", () => respondNotification(msg, btn.dataset.notificationMsg, el)));
         } else {
-          el.innerHTML = `<p class="eyebrow">兴趣确认</p><h3>${escapeHtml(msg.domain)}</h3><p class="video-meta">${escapeHtml(msg.reason)}</p><div class="profile-chip-row">${asArray(msg.specifics).map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join("")}</div><div class="message-card-actions"><div class="card-feedback-icons" aria-label="确认或排除这个兴趣"><button class="feedback-icon-btn" data-probe="confirm" type="button" aria-label="喜欢" title="喜欢"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M7 10v10"/><path d="M15 5.2 14 10h5.4a1.8 1.8 0 0 1 1.7 2.2l-1.5 6A2.4 2.4 0 0 1 17.3 20H7"/><path d="M7 10l4.5-5.3A2 2 0 0 1 15 6v4"/></svg></button><span class="feedback-separator" aria-hidden="true">/</span><button class="feedback-icon-btn" data-probe="reject" type="button" aria-label="不喜欢" title="不喜欢"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M17 14V4"/><path d="M9 18.8 10 14H4.6a1.8 1.8 0 0 1-1.7-2.2l1.5-6A2.4 2.4 0 0 1 6.7 4H17"/><path d="M17 14l-4.5 5.3A2 2 0 0 1 9 18v-4"/></svg></button></div><div class="message-primary-actions"><button class="small-btn" data-probe="chat">多聊聊</button></div></div>`;
+          const isAvoidance = messageType(msg) === "avoidance.probe";
+          const eyebrow = isAvoidance ? "避雷确认" : "兴趣确认";
+          const actionsLabel = isAvoidance ? "确认或排除这个避雷方向" : "确认或排除这个兴趣";
+          const confirmLabel = isAvoidance ? "确实不喜欢" : "喜欢";
+          const rejectLabel = isAvoidance ? "不是" : "不喜欢";
+          el.innerHTML = `<p class="eyebrow">${eyebrow}</p><h3>${escapeHtml(msg.domain)}</h3><p class="video-meta">${escapeHtml(msg.reason)}</p><div class="profile-chip-row">${asArray(msg.specifics).map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join("")}</div><div class="message-card-actions"><div class="card-feedback-icons" aria-label="${actionsLabel}"><button class="feedback-icon-btn" data-probe="confirm" type="button" aria-label="${confirmLabel}" title="${confirmLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M7 10v10"/><path d="M15 5.2 14 10h5.4a1.8 1.8 0 0 1 1.7 2.2l-1.5 6A2.4 2.4 0 0 1 17.3 20H7"/><path d="M7 10l4.5-5.3A2 2 0 0 1 15 6v4"/></svg></button><span class="feedback-separator" aria-hidden="true">/</span><button class="feedback-icon-btn" data-probe="reject" type="button" aria-label="${rejectLabel}" title="${rejectLabel}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M17 14V4"/><path d="M9 18.8 10 14H4.6a1.8 1.8 0 0 1-1.7-2.2l1.5-6A2.4 2.4 0 0 1 6.7 4H17"/><path d="M17 14l-4.5 5.3A2 2 0 0 1 9 18v-4"/></svg></button></div><div class="message-primary-actions"><button class="small-btn" data-probe="chat">多聊聊</button></div></div>`;
           if (resolvedResult) {
             el.classList.add("is-resolved");
             const resolvedActions = el.querySelector(".message-card-actions");
@@ -1242,8 +1265,12 @@
       state.resolvingMessageKeys.add(key);
       actions?.querySelectorAll("button").forEach((button) => { button.disabled = true; });
       try {
-        await requestJson(ENDPOINTS.interestProbeRespond, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: msg.domain, response, message: "" }) });
-        const result = response === "confirm" ? "已确认，后续推荐会提高权重。" : "已搁置，后续会少试探这个方向。";
+        const isAvoidance = messageType(msg) === "avoidance.probe";
+        const endpoint = isAvoidance ? ENDPOINTS.avoidanceProbeRespond : ENDPOINTS.interestProbeRespond;
+        await requestJson(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain: msg.domain, response, message: "" }) });
+        const result = isAvoidance
+          ? response === "confirm" ? "已确认避雷方向，后续会减少类似内容。" : "已搁置，暂时不作为避雷方向。"
+          : response === "confirm" ? "已确认，后续推荐会提高权重。" : "已搁置，后续会少试探这个方向。";
         state.resolvedMessageResults.set(key, result);
         el.classList.remove("is-resolving");
         el.classList.add("is-resolved");
@@ -1251,12 +1278,14 @@
           actions.classList.add("is-result");
           actions.innerHTML = `<div class="message-action-result" title="${escapeHtml(result)}">${escapeHtml(result)}</div>`;
         }
-        showToast(response === "confirm" ? "已确认这个兴趣方向" : "已搁置这个兴趣方向");
+        showToast(isAvoidance
+          ? response === "confirm" ? "已确认这个避雷方向" : "已搁置这个避雷方向"
+          : response === "confirm" ? "已确认这个兴趣方向" : "已搁置这个兴趣方向");
         setTimeout(() => {
           collapseMessageItem(key, el, () => {
             state.resolvingMessageKeys.delete(key);
             state.resolvedMessageResults.delete(key);
-            if (msg.domain) state.handledProbeDomains.add(String(msg.domain));
+            if (msg.domain) state.handledProbeKeys.add(probeKey(messageType(msg), msg.domain));
             state.messages = state.messages.filter((item) => messageKey(item) !== key);
             if (state.messageListSnapshot) state.messageListSnapshot = state.messageListSnapshot.filter((item) => messageKey(item) !== key);
             state.messageListDomLocked = false;
@@ -1271,7 +1300,7 @@
         el.classList.remove("is-resolving");
         el.style.minHeight = "";
         actions?.querySelectorAll("button").forEach((button) => { button.disabled = false; });
-        showToast(`兴趣反馈失败：${error.message || "后端不可用"}`);
+        showToast(`确认反馈失败：${error.message || "后端不可用"}`);
       }
     }
 
@@ -1288,15 +1317,23 @@
       if (!domain || !response) return;
       row.querySelectorAll("[data-spec-response]").forEach((btn) => { btn.disabled = true; });
       try {
-        await requestJson(ENDPOINTS.interestProbeRespond, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain, response, message: "" }) });
-        row.innerHTML = `<p class="spec-result">${response === "confirm" ? `好，「${escapeHtml(domain)}」记住了。` : `好，「${escapeHtml(domain)}」先不看了。`}</p>`;
-        state.messages = state.messages.filter((msg) => msg.domain !== domain);
+        const type = button.dataset.specType || "interest.probe";
+        const isAvoidance = isAvoidanceProbe(type);
+        const endpoint = isAvoidance ? ENDPOINTS.avoidanceProbeRespond : ENDPOINTS.interestProbeRespond;
+        await requestJson(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain, response, message: "" }) });
+        row.innerHTML = `<p class="spec-result">${isAvoidance
+          ? response === "confirm" ? `好，「${escapeHtml(domain)}」会作为避雷方向处理。` : `好，「${escapeHtml(domain)}」不记成避雷。`
+          : response === "confirm" ? `好，「${escapeHtml(domain)}」记住了。` : `好，「${escapeHtml(domain)}」先不看了。`}</p>`;
+        state.handledProbeKeys.add(probeKey(type, domain));
+        state.messages = state.messages.filter((msg) => !(messageType(msg) === messageType({ type }) && msg.domain === domain));
         renderMessages();
-        showToast(response === "confirm" ? "已确认这个猜测兴趣" : "已排除这个猜测兴趣");
+        showToast(isAvoidance
+          ? response === "confirm" ? "已确认这个避雷方向" : "已排除这个避雷方向"
+          : response === "confirm" ? "已确认这个猜测兴趣" : "已排除这个猜测兴趣");
         setTimeout(() => { void refreshProfile(); }, 1200);
       } catch (error) {
         row.querySelectorAll("[data-spec-response]").forEach((btn) => { btn.disabled = false; });
-        showToast(`兴趣反馈失败：${error.message || "后端不可用"}`);
+        showToast(`确认反馈失败：${error.message || "后端不可用"}`);
       }
     }
 
@@ -1512,16 +1549,22 @@
       const view = $("#messageChatView");
       const input = $("#messageChatInput");
       state.messageScrollTop = panel?.scrollTop || 0;
+      const type = messageType(msg);
+      const isAvoidance = type === "avoidance.probe";
       state.messageChatDomain = msg.domain || "";
+      state.messageChatScope = isAvoidance ? "avoidance_probe" : "probe";
       openPanel("messagesDrawer");
       drawer?.classList.add("is-chatting");
       if (view) view.hidden = false;
       const title = $("#messageChatTitle");
       const context = $("#messageChatContext");
-      const prompt = msg.domain ? `我想多聊聊「${msg.domain}」这个兴趣方向。` : "我想多聊聊这个兴趣方向。";
+      const prompt = msg.domain
+        ? `我想多聊聊「${msg.domain}」这个${isAvoidance ? "避雷" : "兴趣"}方向。`
+        : `我想多聊聊这个${isAvoidance ? "避雷" : "兴趣"}方向。`;
       state.messageChatPrompt = prompt;
-      if (title) title.textContent = msg.domain ? `聊聊「${msg.domain}」` : "聊聊这个兴趣";
-      if (context) context.textContent = msg.reason || "这轮对话会沿用消息里的兴趣上下文。";
+      state.messageChatSubjectTitle = msg.domain || (isAvoidance ? "这个避雷方向" : "这个兴趣方向");
+      if (title) title.textContent = msg.domain ? `聊聊${isAvoidance ? "避雷" : "兴趣"}「${msg.domain}」` : `聊聊这个${isAvoidance ? "避雷" : "兴趣"}`;
+      if (context) context.textContent = msg.reason || `这轮对话会沿用消息里的${isAvoidance ? "避雷" : "兴趣"}上下文。`;
       if (input) {
         input.value = "";
         input.placeholder = "继续写你想补充的问题、偏好或例子";
@@ -1537,6 +1580,10 @@
       const view = $("#messageChatView");
       drawer?.classList.remove("is-chatting");
       if (view) view.hidden = true;
+      state.messageChatDomain = "";
+      state.messageChatPrompt = "";
+      state.messageChatScope = "probe";
+      state.messageChatSubjectTitle = "";
       window.setTimeout(() => {
         if (panel) panel.scrollTop = state.messageScrollTop || 0;
       }, 0);
@@ -1568,7 +1615,13 @@
       state.chat.push({ role: "user", text: message });
       state.chat.push({ role: "agent", text: "正在提交给后端，并等待 durable chat turn 完成。" });
       renderChat();
-      const payload = { session: "webui", scope: "chat", message: payloadMessage };
+      const payload = {
+        session: "webui",
+        scope: options.scope || "chat",
+        subject_id: options.subjectId || "",
+        subject_title: options.subjectTitle || "",
+        message: payloadMessage
+      };
       const turn = await requestJson(ENDPOINTS.chatTurns, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!turn?.turn_id) {
         state.chat[state.chat.length - 1] = { role: "agent", text: "当前没有连上后端，聊天没有提交成功。请检查 FastAPI 地址后重试。" };
@@ -2039,7 +2092,15 @@
       applyRuntimeStatus({ ...event, live_summary: event.message || event.live_summary || event.type });
       if (["refresh.pool_updated", "recommendation.reshuffled", "config_reloaded", "init_completed"].includes(event.type)) void hydrateFromBackend();
       if (event.type === "activity.added") void loadActivityPage({ reset: true });
-      if (event.type === "profile_updated" || event.type === "interest.confirmed" || event.type === "interest.rejected" || event.type === "interest.chat") void refreshProfile();
+      if (
+        event.type === "profile_updated" ||
+        event.type === "interest.confirmed" ||
+        event.type === "interest.rejected" ||
+        event.type === "interest.chat" ||
+        event.type === "avoidance.confirmed" ||
+        event.type === "avoidance.rejected" ||
+        event.type === "avoidance.chat"
+      ) void refreshProfile();
       if (event.type === "delight.candidate" && event.bvid) {
         const delight = normalizeDelight(event);
         if (delight) {
@@ -2058,6 +2119,7 @@
       if (event.type === "delight.refreshed") void fetchDelightQueue();
       if (event.type === "notification.pending" && event.bvid) mergeMessages([{ ...event, type: "notification" }]);
       if (event.type === "interest.probe" && event.domain) mergeMessages([{ type: "interest.probe", domain: event.domain, reason: event.reason || event.message || "后端希望确认这个兴趣方向。", specifics: event.specifics || event.examples || [] }]);
+      if (event.type === "avoidance.probe" && event.domain) mergeMessages([{ type: "avoidance.probe", domain: event.domain, reason: event.reason || event.message || "后端希望确认这个避雷方向。", specifics: event.specifics || event.examples || [] }]);
     }
 
     function connectRuntimeStream() {
@@ -2084,6 +2146,7 @@
       if (profile && profile.initialized !== false) {
         state.profile = profile;
         hydrateInboxFromSpeculations(profile.speculative_interests);
+        hydrateInboxFromSpeculations(profile.speculative_avoidances, "avoidance.probe");
         renderRail();
         renderProfileDetails();
         renderMessages();
@@ -2116,6 +2179,7 @@
       if (profilePayload && profilePayload.initialized !== false) {
         state.profile = profilePayload;
         hydrateInboxFromSpeculations(profilePayload.speculative_interests);
+        hydrateInboxFromSpeculations(profilePayload.speculative_avoidances, "avoidance.probe");
       }
       const chatItems = Array.isArray(chatTurns) ? chatTurns : asArray(chatTurns?.items);
       if (chatItems.length) {
@@ -2348,6 +2412,7 @@
     safeBind("#messagesBtn", "click", () => {
       closeSideDrawer();
       hydrateInboxFromSpeculations(state.profile?.speculative_interests);
+      hydrateInboxFromSpeculations(state.profile?.speculative_avoidances, "avoidance.probe");
       state.messageListSnapshot = getRenderableMessages();
       openPanel("messagesDrawer");
       returnToMessages();
@@ -2383,7 +2448,19 @@
     window.addEventListener("resize", scheduleActivityRailHeightSync);
     safeBind("#chatForm", "submit", (event) => { event.preventDefault(); const input = $("#chatInput"); const text = input?.value?.trim() || ""; if (!text) return; input.value = ""; sendChat(text); });
     safeBind("#messageChatBackBtn", "click", returnToMessages);
-    safeBind("#messageChatForm", "submit", (event) => { event.preventDefault(); const input = $("#messageChatInput"); const text = input?.value?.trim() || ""; if (!text) return; input.value = ""; sendChat(text, { contextPrefix: state.messageChatPrompt }); });
+    safeBind("#messageChatForm", "submit", (event) => {
+      event.preventDefault();
+      const input = $("#messageChatInput");
+      const text = input?.value?.trim() || "";
+      if (!text) return;
+      input.value = "";
+      sendChat(text, {
+        contextPrefix: state.messageChatPrompt,
+        scope: state.messageChatScope,
+        subjectId: state.messageChatDomain,
+        subjectTitle: state.messageChatSubjectTitle
+      });
+    });
     safeBind("#llmProvider", "change", () => applyConfig({ ...(state.config || {}), llm: { ...(state.config?.llm || {}), default_provider: $("#llmProvider")?.value || "" } }));
     safeBind("#llmFallbackProvider", "change", () => applyConfig({ ...(state.config || {}), llm: { ...(state.config?.llm || {}), fallback_provider: $("#llmFallbackProvider")?.value || "" } }));
     safeBind("#embeddingFallbackProvider", "change", () => applyConfig({ ...(state.config || {}), llm: { ...(state.config?.llm || {}), embedding: { ...(state.config?.llm?.embedding || {}), fallback_provider: $("#embeddingFallbackProvider")?.value || "" } } }));
