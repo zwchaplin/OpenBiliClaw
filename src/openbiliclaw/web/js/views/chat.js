@@ -50,6 +50,14 @@ let overlayOpen = false;
 let notifications = [];
 let delightMsgs = [];
 
+function setProbeCardBusy(card, busy) {
+  if (!card) return;
+  card.classList.toggle("is-processing", busy);
+  for (const actionBtn of card.querySelectorAll("[data-probe]")) {
+    actionBtn.disabled = busy;
+  }
+}
+
 // Placeholder carousel
 const PLACEHOLDERS = [
   "\u6700\u8FD1\u6709\u4EC0\u4E48\u60F3\u804A\u7684\uFF1F",
@@ -344,7 +352,16 @@ function renderOverlay() {
   }
 
   if (notifications.length === 0) {
-    panel.innerHTML += `<div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:48px 24px;color:var(--text-muted)"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.4"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span style="font-size:14px">暂时没有新消息</span><span style="font-size:12px;opacity:0.7">兴趣探测会在这里出现</span></div>`;
+    const emptyState = document.createElement("div");
+    emptyState.className = "messages-empty-state";
+    emptyState.innerHTML = `
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+        <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+      </svg>
+      <span class="messages-empty-title">暂时没有新消息</span>
+      <span class="messages-empty-subtitle">兴趣探测会在这里出现</span>`;
+    panel.appendChild(emptyState);
   }
 
   overlay.innerHTML = "";
@@ -368,18 +385,18 @@ function renderOverlay() {
         });
         return;
       }
-      btn.disabled = true;
+      setProbeCardBusy(card, true);
       try {
         const resp = isAvoidance
           ? await respondToAvoidanceProbe(domain, action)
           : await respondToProbe(domain, action);
         if (resp && resp.ok === false) {
-          // Backend no longer recognises this probe (expired/rotated)
+          // Backend no longer recognises this probe (already handled/rotated).
           const card = btn.closest(".message-card");
           if (card) {
             const errEl = document.createElement("div");
             errEl.className = "inline-chat-error";
-            errEl.textContent = "这条已过期，正在刷新…";
+            errEl.textContent = "这条已处理或已过期，正在刷新…";
             card.appendChild(errEl);
           }
           // Refresh notifications from backend
@@ -402,7 +419,7 @@ function renderOverlay() {
         updateBadgeCount();
         renderOverlay();
       } catch {
-        btn.disabled = false;
+        setProbeCardBusy(card, false);
       }
     });
   }

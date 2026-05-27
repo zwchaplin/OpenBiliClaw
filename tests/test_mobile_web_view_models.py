@@ -703,7 +703,7 @@ class TestMobileWebViewModels:
         assert "export async function respondToProbe(domain, responseType, options = {})" in api_js
         assert 'surface: "profile"' in profile_js
         assert 'payload.surface = "profile"' in desktop_js
-        assert "respondToProbe(domain, action, { surface: \"profile\" })" in profile_js
+        assert 'respondToProbe(domain, action, { surface: "profile" })' in profile_js
 
     def test_normalize_profile_summary_preserves_probe_mode_metadata(self) -> None:
         _assert_js(
@@ -740,6 +740,20 @@ class TestMobileWebViewModels:
         assert "speculative_avoidances" in profile_js
         assert "renderSpecAvoidances" in profile_js
         assert "respondToAvoidanceProbe" in profile_js
+
+    def test_mobile_probe_card_locks_all_actions_after_tap(self) -> None:
+        chat_js = Path("src/openbiliclaw/web/js/views/chat.js").read_text()
+
+        assert "setProbeCardBusy(card, true)" in chat_js
+        assert "setProbeCardBusy(card, false)" in chat_js
+        assert 'card.querySelectorAll("[data-probe]")' in chat_js
+
+    def test_mobile_empty_messages_overlay_preserves_close_handler(self) -> None:
+        chat_js = Path("src/openbiliclaw/web/js/views/chat.js").read_text()
+
+        assert "panel.innerHTML +=" not in chat_js
+        assert 'emptyState.className = "messages-empty-state"' in chat_js
+        assert "panel.appendChild(emptyState)" in chat_js
 
     def test_desktop_web_knows_avoidance_probe_endpoint(self) -> None:
         source = Path("src/openbiliclaw/web/desktop/assets/js/app.js").read_text()

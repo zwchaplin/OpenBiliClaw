@@ -3337,6 +3337,62 @@ class TestBackendAPI:
         history = memory.load_discovery_runtime_state()["avoidance_probe_feedback_history"]
         assert history[0]["response"] == "reject"
 
+    def test_stale_avoidance_probe_reject_does_not_record_feedback_history(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.runtime_state: dict[str, object] = {
+                    "avoidance_probe_feedback_history": [],
+                }
+                self.cognition_updates: list[dict[str, object]] = []
+
+            def load_discovery_runtime_state(self) -> dict[str, object]:
+                return dict(self.runtime_state)
+
+            def save_discovery_runtime_state(self, state: dict[str, object]) -> None:
+                self.runtime_state = dict(state)
+
+            def load_cognition_updates(self) -> list[dict[str, object]]:
+                return list(self.cognition_updates)
+
+            def save_cognition_updates(self, updates: list[dict[str, object]]) -> None:
+                self.cognition_updates = list(updates)
+
+        class FakeAvoidanceSpeculator:
+            def __init__(self) -> None:
+                self.rejected: list[tuple[str, int]] = []
+
+            def get_active_avoidances(self) -> list[object]:
+                return []
+
+            def user_reject_avoidance(self, domain: str, cooldown_days: int = 30) -> bool:
+                self.rejected.append((domain, cooldown_days))
+                return False
+
+        class FakeSoulEngine:
+            def __init__(self) -> None:
+                self._avoidance_speculator = FakeAvoidanceSpeculator()
+
+        memory = FakeMemoryManager()
+        soul_engine = FakeSoulEngine()
+        app = create_app(
+            memory_manager=memory,
+            database=object(),
+            soul_engine=soul_engine,
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/avoidance-probes/respond",
+            json={"domain": "比赛话题里的情绪型切片复读", "response": "reject"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        assert memory.runtime_state["avoidance_probe_feedback_history"] == []
+        assert soul_engine._avoidance_speculator.rejected == [("比赛话题里的情绪型切片复读", 30)]
+
     def test_avoidance_probe_confirm_schedules_dislike_writeback(
         self,
         tmp_path: Path,

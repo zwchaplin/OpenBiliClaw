@@ -172,7 +172,7 @@
 - runtime push 和 OpenClaw `get_next_probe()` 共用同一套 probe selection 规则
 - `confirmation_count` 仍然是第一优先级；当验证压力相同，会优先选择最近没推过的 `experience_mode + entry_load` 组合
 - probe 去重状态写入并持久化到 `discovery_runtime_state["probed_domains"]`、`discovery_runtime_state["probed_axes"]` 和 `discovery_runtime_state["probed_distance_bands"]`；runtime push 只有在 `interest.probe` 实际投递到至少一个 runtime stream 订阅者后才记录，避免前端离线时误消耗探针
-- `/api/interest-probes/respond` 会把 confirm / reject / chat classification 写入 `discovery_runtime_state["probe_feedback_history"]`；classification 保留 `raw_text_excerpt / classifier / resulting_action` 等审计字段。后续生成会降低 reject / chat_rejected 体验轴的入池优先级，选择会跳过明显重复的 domain，并在同等压力下避开负向反馈过的体验轴与 probe distance
+- `/api/interest-probes/respond` 会把真实命中 active 探针的 confirm / reject，以及 chat classification 写入 `discovery_runtime_state["probe_feedback_history"]`；stale / 已处理卡片返回 `ok=false` 时不写历史，避免重复点击污染 novelty 依据。classification 保留 `raw_text_excerpt / classifier / resulting_action` 等审计字段。后续生成会降低 reject / chat_rejected 体验轴的入池优先级，选择会跳过明显重复的 domain，并在同等压力下避开负向反馈过的体验轴与 probe distance
 - runtime push 成功投递后、OpenClaw `get_next_probe()` 成功返回后，都会记录本次 domain / axis / probe_mode，连续调用不会重复返回同一条 active probe
 
 ### 短期探索 Buffer
@@ -250,6 +250,7 @@ active 池会做两层多样性保护：词面 / specifics 的 novelty guard 阻
 
 - `GET /api/profile-summary` 返回 `speculative_avoidances`，供移动 Web、桌面 Web 和插件画像页展示。
 - `GET /api/avoidance-probes/pending` / `POST /api/avoidance-probes/respond` / `POST /api/avoidance-probes/trigger` 提供前端与 OpenClaw 的操作入口。
+- `POST /api/avoidance-probes/respond` 只有在 active 避雷探针真实命中时才写入 `avoidance_probe_feedback_history`；已确认、已拒绝或被刷新替换的 stale 卡片会返回 `ok=false`，不会再追加矛盾的 confirm / reject 历史。
 - runtime stream 推送 `avoidance.probe`，确认、否认和聊天分别广播 `avoidance.confirmed` / `avoidance.rejected` / `avoidance.chat`。
 - 配置热重载后，`RuntimeContext.restart_background_tasks()` 会 detached 调度避雷 speculator 的 `force_tick()`，并传入 `discovery_runtime_state["avoidance_probe_feedback_history"]`；这条 one-shot 与正向兴趣 speculator 共用 `_safe_post_reload_speculate()`，避免阻塞 `/api/config` 响应。
 - `ProfileUpdatePipeline.tick()` 调用避雷 speculator 时会捕获并记录 warning，避免 refresh loop 外层的 broad suppress 把异常静默吞掉。

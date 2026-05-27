@@ -2473,6 +2473,7 @@ def create_app(
         resulting_action: str = "",
         state_key: str = "probe_feedback_history",
         metadata_fn: Any | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         """Persist explicit user feedback for future probe novelty checks."""
         from openbiliclaw.soul.speculator import append_probe_feedback_history
@@ -2486,7 +2487,9 @@ def create_app(
             return
         try:
             state = load_state()
-            if metadata_fn is not None:
+            if metadata is not None:
+                entry = dict(metadata)
+            elif metadata_fn is not None:
                 entry = metadata_fn(domain)
             else:
                 entry = _probe_metadata_from_active_speculation(speculator, domain)
@@ -3037,18 +3040,20 @@ def create_app(
             confirmation_source = requested_source or (
                 "profile_confirmed" if surface == "profile" else "probe_confirmed"
             )
-            _record_probe_feedback_history(
-                domain,
-                "confirm",
-                speculator=speculator,
-                resulting_action="confirmed",
-            )
+            metadata = _probe_metadata_from_active_speculation(speculator, domain)
             ok = _confirm_speculation_with_source(
                 speculator,
                 domain,
                 confirmation_source=confirmation_source,
             )
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "confirm",
+                    speculator=speculator,
+                    resulting_action="confirmed",
+                    metadata=metadata,
+                )
                 # Force_tick generates 5 new probes via LLM (~30-60s).
                 # Running it inline blocks the response past the
                 # browser fetch timeout (35s) — the user gives up,
@@ -3107,13 +3112,15 @@ def create_app(
             return {"ok": ok, "action": "confirmed", "domain": domain}
 
         if response_type == "reject":
-            _record_probe_feedback_history(
-                domain,
-                "reject",
-                speculator=speculator,
-            )
+            metadata = _probe_metadata_from_active_speculation(speculator, domain)
             ok = speculator.user_reject_speculation(domain)
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "reject",
+                    speculator=speculator,
+                    metadata=metadata,
+                )
                 _record_probe_cognition(
                     f"你对「{domain}」暂时不感兴趣，30 天内不再推送。",
                     domain,
@@ -3279,17 +3286,18 @@ def create_app(
             )
 
         if response_type == "confirm":
-            _record_probe_feedback_history(
-                domain,
-                "confirm",
-                speculator=speculator,
-                state_key="avoidance_probe_feedback_history",
-                metadata_fn=metadata_fn,
-            )
+            metadata = metadata_fn(domain)
             confirm_fn = getattr(speculator, "user_confirm_avoidance", None)
             active_avoidance = confirm_fn(domain) if callable(confirm_fn) else None
             ok = active_avoidance is not None
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "confirm",
+                    speculator=speculator,
+                    state_key="avoidance_probe_feedback_history",
+                    metadata=metadata,
+                )
                 topics = topics_for_confirmed_avoidance(active_avoidance)
                 summary = f"你确认了避开「{domain}」，已开始更新不喜欢方向。"
                 _record_probe_cognition(
@@ -3330,16 +3338,17 @@ def create_app(
             return {"ok": ok, "action": "confirmed", "domain": domain}
 
         if response_type == "reject":
-            _record_probe_feedback_history(
-                domain,
-                "reject",
-                speculator=speculator,
-                state_key="avoidance_probe_feedback_history",
-                metadata_fn=metadata_fn,
-            )
+            metadata = metadata_fn(domain)
             reject_fn = getattr(speculator, "user_reject_avoidance", None)
             ok = bool(reject_fn(domain) if callable(reject_fn) else False)
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "reject",
+                    speculator=speculator,
+                    state_key="avoidance_probe_feedback_history",
+                    metadata=metadata,
+                )
                 _record_probe_cognition(
                     f"你表示并不需要避开「{domain}」，30 天内不再推送。",
                     domain,
@@ -3905,8 +3914,7 @@ def create_app(
             suppressed = _purge_self_authored_pool_items(ctx.database, self_info)
             if suppressed:
                 logger.info(
-                    "xhs self_info purge: suppressed %d self-authored pool item(s) "
-                    "(nickname=%r)",
+                    "xhs self_info purge: suppressed %d self-authored pool item(s) (nickname=%r)",
                     suppressed,
                     self_info.get("nickname", ""),
                 )
