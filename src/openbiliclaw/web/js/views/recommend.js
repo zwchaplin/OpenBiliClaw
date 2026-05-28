@@ -20,6 +20,9 @@ import {
   addToWatchLater,
   removeFromWatchLater,
   watchLaterStatus,
+  addToFavorite,
+  removeFromFavorite,
+  favoriteStatus,
 } from "../api.js";
 import { state, patchState } from "../state.js";
 import {
@@ -54,6 +57,8 @@ let feedbackSheet = null; // { itemId, note, submitState }
 const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
 const watchLaterSaved = new Set(); // bvid strings currently bookmarked
 let watchLaterBusy = false; // mutex for toggle requests
+const favoriteSaved = new Set(); // bvid strings currently favorited
+let favoriteBusy = false; // mutex for favorite toggle requests
 const COVER_PRELOAD_BATCH_SIZE = 12;
 const COVER_PRELOAD_WAIT_TIMEOUT_MS = 3000;
 const AUTO_APPEND_ROOT_MARGIN = "700px 0px 1400px 0px";
@@ -414,21 +419,30 @@ function renderDelightTray() {
       { label: "\u770B\u770B", action: "view" },
       { label: "\u559C\u6B22", action: "like" },
       { label: "\u2606", action: "watch-later" },
+      { label: "\u2661", action: "favorite" },
       { label: "\u4E0D\u611F\u5174\u8DA3", action: "reject" },
       { label: "\u804A\u4E00\u804A", action: "chat" },
     ];
     for (const b of btns) {
       const btn = document.createElement("button");
       btn.className = `btn ${b.action === "view" ? "btn-brand" : "btn-outline"}`;
-      btn.textContent = b.label;
+      // 稍后再看 = 时钟 / 收藏 = 星星，紧凑 SVG 图标按钮，状态走 aria-pressed。
+      if (b.action === "watch-later" || b.action === "favorite") {
+        btn.classList.add("delight-save-toggle");
+        btn.classList.add(b.action === "favorite" ? "favorite-btn" : "watch-later-btn");
+        btn.innerHTML = b.action === "favorite" ? STAR_SVG_ICON : CLOCK_SVG_ICON;
+        btn.setAttribute("aria-pressed", "false");
+      } else {
+        btn.textContent = b.label;
+      }
       if (b.action === "watch-later") {
         let busy = false;
-        btn.title = "\u7A0D\u540E\u518D\u770B";
+        btn.title = "稍后再看";
         btn.addEventListener("click", async () => {
           if (busy) return;
           busy = true;
           const wasSaved = watchLaterSaved.has(d.bvid);
-          btn.textContent = wasSaved ? "\u2606" : "\u2605";
+          btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
           try {
             if (wasSaved) {
               await removeFromWatchLater(d.bvid);
@@ -438,18 +452,45 @@ function renderDelightTray() {
               watchLaterSaved.add(d.bvid);
             }
           } catch {
-            btn.textContent = wasSaved ? "\u2605" : "\u2606";
+            btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
           } finally {
             busy = false;
           }
         });
-        if (watchLaterSaved.has(d.bvid)) {
-          btn.textContent = "\u2605";
-        }
+        if (watchLaterSaved.has(d.bvid)) btn.setAttribute("aria-pressed", "true");
         watchLaterStatus(d.bvid).then((res) => {
           if (res && res.saved) {
             watchLaterSaved.add(d.bvid);
-            btn.textContent = "\u2605";
+            btn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
+      } else if (b.action === "favorite") {
+        let busy = false;
+        btn.title = "收藏";
+        btn.addEventListener("click", async () => {
+          if (busy) return;
+          busy = true;
+          const wasSaved = favoriteSaved.has(d.bvid);
+          btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+          try {
+            if (wasSaved) {
+              await removeFromFavorite(d.bvid);
+              favoriteSaved.delete(d.bvid);
+            } else {
+              await addToFavorite(d.bvid);
+              favoriteSaved.add(d.bvid);
+            }
+          } catch {
+            btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          } finally {
+            busy = false;
+          }
+        });
+        if (favoriteSaved.has(d.bvid)) btn.setAttribute("aria-pressed", "true");
+        favoriteStatus(d.bvid).then((res) => {
+          if (res && res.saved) {
+            favoriteSaved.add(d.bvid);
+            btn.setAttribute("aria-pressed", "true");
           }
         }).catch(() => {});
       } else {
@@ -458,7 +499,7 @@ function renderDelightTray() {
           btn.disabled = true;
         }
       }
-      actions.appendChild(btn);
+            actions.appendChild(btn);
     }
     tray.appendChild(actions);
   }
@@ -868,12 +909,12 @@ function renderCard(rawItem, index = 0) {
   });
 
   const savedNow = watchLaterSaved.has(item.bvid);
-  const starBtn = createCardAction(savedNow ? "\u2605" : "\u2606", async () => {
+  const starBtn = createCoverChip(CLOCK_SVG_ICON, "watch-later-btn", async () => {
     if (watchLaterBusy) return;
     watchLaterBusy = true;
     const wasSaved = watchLaterSaved.has(item.bvid);
     // optimistic toggle
-    starBtn.textContent = wasSaved ? "\u2606" : "\u2605";
+    setChipState(starBtn, !wasSaved, wasSaved ? "☆" : "★");
     try {
       if (wasSaved) {
         await removeFromWatchLater(item.bvid);
@@ -884,24 +925,65 @@ function renderCard(rawItem, index = 0) {
       }
     } catch {
       // revert on failure
-      starBtn.textContent = wasSaved ? "\u2605" : "\u2606";
+      setChipState(starBtn, wasSaved, wasSaved ? "★" : "☆");
     } finally {
       watchLaterBusy = false;
     }
   });
-  starBtn.title = savedNow ? "取消收藏" : "稍后再看";
+  setChipState(starBtn, savedNow, savedNow ? "★" : "☆");
+  starBtn.title = savedNow ? "取消稍后再看" : "稍后再看";
   // lazy-load real state from backend
   watchLaterStatus(item.bvid).then((res) => {
     if (res && res.saved) {
       watchLaterSaved.add(item.bvid);
-      starBtn.textContent = "\u2605";
-      starBtn.title = "取消收藏";
+      setChipState(starBtn, true, "★");
+      starBtn.title = "取消稍后再看";
     }
   }).catch(() => {});
 
+  const favNow = favoriteSaved.has(item.bvid);
+  const favBtn = createCoverChip(STAR_SVG_ICON, "favorite-btn", async () => {
+    if (favoriteBusy) return;
+    favoriteBusy = true;
+    const wasSaved = favoriteSaved.has(item.bvid);
+    setChipState(favBtn, !wasSaved, wasSaved ? "♡" : "♥");
+    try {
+      if (wasSaved) {
+        await removeFromFavorite(item.bvid);
+        favoriteSaved.delete(item.bvid);
+      } else {
+        await addToFavorite(item.bvid);
+        favoriteSaved.add(item.bvid);
+      }
+    } catch {
+      setChipState(favBtn, wasSaved, wasSaved ? "♥" : "♡");
+    } finally {
+      favoriteBusy = false;
+    }
+  });
+  setChipState(favBtn, favNow, favNow ? "♥" : "♡");
+  favBtn.title = favNow ? "取消收藏" : "收藏";
+  favoriteStatus(item.bvid).then((res) => {
+    if (res && res.saved) {
+      favoriteSaved.add(item.bvid);
+      setChipState(favBtn, true, "♥");
+      favBtn.title = "取消收藏";
+    }
+  }).catch(() => {});
+
+  // Save chips overlay the cover top-right — keeps the bottom action bar light
+  // (看看 / 喜欢 / 不感兴趣 / 聊一聊) instead of cramming 6 buttons in one row.
+  const coverFrame = card.querySelector(".card-cover-frame");
+  if (coverFrame) {
+    const coverActions = document.createElement("div");
+    coverActions.className = "cover-actions";
+    coverActions.appendChild(starBtn);
+    coverActions.appendChild(favBtn);
+    coverFrame.appendChild(coverActions);
+  }
+
   actionsRow.appendChild(openBtn);
   actionsRow.appendChild(likeBtn);
-  actionsRow.appendChild(starBtn);
   actionsRow.appendChild(dislikeBtn);
   actionsRow.appendChild(commentBtn);
   card.appendChild(actionsRow);
@@ -924,6 +1006,30 @@ function createCardAction(label, handler) {
   btn.textContent = label;
   btn.addEventListener("click", handler);
   return btn;
+}
+
+// 稍后再看 = 时钟（一眼看懂"待会看"）；收藏 = 星星。SVG 图标族统一，
+// 选中态由 aria-pressed + CSS 驱动（时钟变色、星星填充），不做字形替换。
+const CLOCK_SVG_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>';
+const STAR_SVG_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>';
+
+function createCoverChip(iconHtml, cls, handler) {
+  const btn = document.createElement("button");
+  btn.className = "cover-chip " + cls;
+  btn.type = "button";
+  btn.innerHTML = iconHtml;
+  btn.setAttribute("aria-pressed", "false");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    handler();
+  });
+  return btn;
+}
+
+function setChipState(btn, pressed) {
+  btn.setAttribute("aria-pressed", pressed ? "true" : "false");
 }
 
 // ── Feedback Bottom Sheet ────────────────────────────────────

@@ -489,6 +489,39 @@ class WatchLaterListResponse(BaseModel):
     total: int
 
 
+class FavoriteAddIn(BaseModel):
+    """Payload to favorite (收藏) a video."""
+
+    bvid: str
+    note: str = ""
+
+
+class FavoriteStateResponse(BaseModel):
+    """Whether a single video is favorited, plus the total count."""
+
+    saved: bool
+    total: int
+
+
+class FavoriteItem(BaseModel):
+    """One item in the favorites list."""
+
+    bvid: str
+    title: str = ""
+    up_name: str = ""
+    cover_url: str = ""
+    content_url: str = ""
+    source_platform: str = ""
+    added_at: str = ""
+
+
+class FavoriteListResponse(BaseModel):
+    """Paginated favorites list."""
+
+    items: list[FavoriteItem]
+    total: int
+
+
 class RecommendationClickIn(BaseModel):
     """Payload for a recommendation click-through from the extension popup."""
 

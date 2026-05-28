@@ -20,7 +20,8 @@
       avoidanceProbeRespond: "/avoidance-probes/respond",
       sourceShareSuggestion: "/config/source-share-suggestion",
       config: "/config?reveal_keys=true",
-      watchLater: "/watch-later"
+      watchLater: "/watch-later",
+      favorites: "/favorites"
     };
 
     const state = {
@@ -391,7 +392,7 @@
       }
     }
 
-    const MAIN_PAGE_IDS = ["homePage", "profilePage", "chatPage", "settingsPage"];
+    const MAIN_PAGE_IDS = ["homePage", "watchLaterPage", "favoritesPage", "profilePage", "chatPage", "settingsPage"];
 
     function showMainPage(pageId) {
       MAIN_PAGE_IDS.forEach((id) => {
@@ -439,6 +440,139 @@
       document.querySelectorAll(".drawer.is-open, .overlay.is-open").forEach((drawer) => closePanel(drawer.id));
       setActiveSettingsPanel(panel || "models");
       showMainPage("settingsPage");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    // ── Saved pages: 稍后再看 (watch-later) & 收藏 (favorites) ──────
+    // The two are independent backend collections sharing one list UI.
+
+    function watchLaterStatus(bvid) {
+      return requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`);
+    }
+
+    function favoriteStatus(bvid) {
+      return requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(bvid)}`);
+    }
+
+    function updateSavedBadge(badgeId, total) {
+      const badge = document.getElementById(badgeId);
+      if (!badge) return;
+      const n = Number(total) || 0;
+      if (n > 0) {
+        badge.textContent = n > 99 ? "99+" : String(n);
+        badge.removeAttribute("hidden");
+      } else {
+        badge.textContent = "";
+        badge.setAttribute("hidden", "");
+      }
+    }
+
+    function renderSavedList(listId, emptyId, items, onRemove) {
+      const grid = document.getElementById(listId);
+      const empty = document.getElementById(emptyId);
+      if (!grid) return;
+      const rows = Array.isArray(items) ? items : [];
+      if (!rows.length) {
+        grid.replaceChildren();
+        if (empty) empty.removeAttribute("hidden");
+        return;
+      }
+      if (empty) empty.setAttribute("hidden", "");
+      grid.replaceChildren(...rows.map((item) => {
+        const card = document.createElement("article");
+        card.className = "video-card saved-card";
+        const url = contentUrl(item);
+        card.innerHTML = `
+          <button class="cover" data-platform="${escapeHtml(item.source_platform || item.platform || "bilibili")}" type="button" aria-label="打开 ${escapeHtml(item.title || item.bvid)}">
+            ${coverImg(item)}
+            <span class="platform">${escapeHtml(platformName(item.source_platform || item.platform))}</span>
+          </button>
+          <div>
+            <p class="video-title">${escapeHtml(item.title || item.bvid)}</p>
+            <p class="video-meta">${escapeHtml(item.up_name || "")}</p>
+          </div>
+          <div class="card-actions saved-card-actions">
+            <button class="small-btn saved-remove" type="button">移除</button>
+          </div>`;
+        card.querySelector(".cover").addEventListener("click", () => {
+          if (url) window.open(url, "_blank", "noopener,noreferrer");
+        });
+        card.querySelector(".saved-remove").addEventListener("click", async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          try {
+            await onRemove(item.bvid);
+            card.remove();
+          } catch {
+            btn.disabled = false;
+          }
+        });
+        return card;
+      }));
+    }
+
+    async function refreshWatchLater() {
+      const data = await requestJson(`${ENDPOINTS.watchLater}?limit=100&offset=0`).catch(() => null);
+      renderSavedList("watchLaterList", "watchLaterEmpty", data?.items, async (bvid) => {
+        await requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+        await refreshWatchLater();
+        syncWatchLaterButtons();
+      });
+      updateSavedBadge("watchLaterCountBadge", data?.total);
+    }
+
+    async function refreshFavorites() {
+      const data = await requestJson(`${ENDPOINTS.favorites}?limit=100&offset=0`).catch(() => null);
+      renderSavedList("favoritesList", "favoritesEmpty", data?.items, async (bvid) => {
+        await requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+        await refreshFavorites();
+        syncFavoriteButtons();
+      });
+      updateSavedBadge("favoritesCountBadge", data?.total);
+    }
+
+    // Re-sync the pressed state + count badge for all visible ☆/♥ toggles.
+    function syncWatchLaterButtons() {
+      requestJson(`${ENDPOINTS.watchLater}?limit=200&offset=0`).then((data) => {
+        const saved = new Set((data?.items || []).map((it) => it.bvid));
+        document.querySelectorAll('.video-card [data-action="watch-later"]').forEach((btn) => {
+          const card = btn.closest(".video-card");
+          const bvid = card?.dataset?.bvid;
+          if (!bvid) return;
+          const on = saved.has(bvid);
+          btn.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        updateSavedBadge("watchLaterCountBadge", data?.total);
+      }).catch(() => {});
+    }
+
+    function syncFavoriteButtons() {
+      requestJson(`${ENDPOINTS.favorites}?limit=200&offset=0`).then((data) => {
+        const saved = new Set((data?.items || []).map((it) => it.bvid));
+        document.querySelectorAll('.video-card [data-action="favorite"]').forEach((btn) => {
+          const card = btn.closest(".video-card");
+          const bvid = card?.dataset?.bvid;
+          if (!bvid) return;
+          const on = saved.has(bvid);
+          btn.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        updateSavedBadge("favoritesCountBadge", data?.total);
+      }).catch(() => {});
+    }
+
+    function openWatchLaterPage() {
+      closeMobileMenu();
+      document.querySelectorAll(".drawer.is-open, .overlay.is-open").forEach((panel) => closePanel(panel.id));
+      showMainPage("watchLaterPage");
+      void refreshWatchLater();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function openFavoritesPage() {
+      closeMobileMenu();
+      document.querySelectorAll(".drawer.is-open, .overlay.is-open").forEach((panel) => closePanel(panel.id));
+      showMainPage("favoritesPage");
+      void refreshFavorites();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -627,6 +761,7 @@
       grid.replaceChildren(...items.map((item) => {
         const card = document.createElement("article");
         card.className = "video-card";
+        card.dataset.bvid = item.bvid || item.id;
         card.innerHTML = `
           <button class="cover" data-platform="${escapeHtml(item.platform)}" type="button" aria-label="打开 ${escapeHtml(item.title)}">
             ${coverImg(item)}
@@ -651,7 +786,13 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18M9.84 9.91A3 3 0 0 0 12 15c.82 0 1.57-.33 2.11-.87M6.5 6.65A10.45 10.45 0 0 0 2.46 12C3.73 16.06 7.52 19 12 19c1.99 0 3.84-.58 5.4-1.58M11 5.05c.33-.03.66-.05 1-.05 4.48 0 8.27 2.94 9.54 7a10.5 10.5 0 0 1-1.19 2.5"/></svg>
               </button>
               <span class="feedback-separator" aria-hidden="true">/</span>
-              <button class="feedback-icon-btn watch-later-btn" data-action="watch-later" type="button" aria-label="稍后再看" title="稍后再看" aria-pressed="false">☆</button>
+              <button class="feedback-icon-btn watch-later-btn" data-action="watch-later" type="button" aria-label="稍后再看" title="稍后再看" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>
+              </button>
+              <span class="feedback-separator" aria-hidden="true">/</span>
+              <button class="feedback-icon-btn favorite-btn" data-action="favorite" type="button" aria-label="收藏" title="收藏" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>
+              </button>
             </div>
             <div class="comment-field"><input placeholder="想围绕这条聊什么？" aria-label="想围绕这条聊什么？"></div>
             <button class="small-btn composer-cancel" data-action="cancel-comment" type="button" aria-label="返回" title="返回">‹</button>
@@ -680,11 +821,21 @@
         const wlBtn = card.querySelector('[data-action="watch-later"]');
         if (wlBtn) {
           const bvid = item.bvid || item.id;
-          requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`).then((res) => {
+          watchLaterStatus(bvid).then((res) => {
             if (res && res.saved) {
-              wlBtn.textContent = "\u2605";
               wlBtn.setAttribute("aria-pressed", "true");
-              wlBtn.title = "\u53D6\u6D88\u6536\u85CF";
+              wlBtn.title = "\u53D6\u6D88\u7A0D\u540E\u518D\u770B";
+            }
+          }).catch(() => {});
+        }
+        // Lazy-load favorite state
+        const favBtn = card.querySelector('[data-action="favorite"]');
+        if (favBtn) {
+          const bvid = item.bvid || item.id;
+          favoriteStatus(bvid).then((res) => {
+            if (res && res.saved) {
+              favBtn.setAttribute("aria-pressed", "true");
+              favBtn.title = "\u53D6\u6D88\u6536\u85CF";
             }
           }).catch(() => {});
         }
@@ -800,7 +951,6 @@
         if (!btn || btn.disabled) return;
         btn.disabled = true;
         const wasSaved = btn.getAttribute("aria-pressed") === "true";
-        btn.textContent = wasSaved ? "\u2606" : "\u2605";
         btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
         btn.title = wasSaved ? "\u7A0D\u540E\u518D\u770B" : "\u53D6\u6D88\u6536\u85CF";
         try {
@@ -811,9 +961,30 @@
             await requestJson(ENDPOINTS.watchLater, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid }) });
           }
         } catch {
-          btn.textContent = wasSaved ? "\u2605" : "\u2606";
           btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
-          btn.title = wasSaved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
+          btn.title = wasSaved ? "\u53D6\u6D88\u7A0D\u540E\u518D\u770B" : "\u7A0D\u540E\u518D\u770B";
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+      if (action === "favorite") {
+        const btn = card.querySelector('[data-action="favorite"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        btn.title = wasSaved ? "\u6536\u85CF" : "\u53D6\u6D88\u6536\u85CF";
+        try {
+          const bvid = item.bvid || item.id;
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.favorites, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid }) });
+          }
+        } catch {
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          btn.title = wasSaved ? "\u53D6\u6D88\u6536\u85CF" : "\u6536\u85CF";
         } finally {
           btn.disabled = false;
         }
@@ -1689,7 +1860,6 @@
         if (!btn || btn.disabled) return;
         btn.disabled = true;
         const wasSaved = btn.getAttribute("aria-pressed") === "true";
-        btn.textContent = wasSaved ? "\u2606" : "\u2605";
         btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
         try {
           if (wasSaved) {
@@ -1698,7 +1868,25 @@
             await requestJson(ENDPOINTS.watchLater, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid: delight.bvid }) });
           }
         } catch {
-          btn.textContent = wasSaved ? "\u2605" : "\u2606";
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+      if (response === "favorite") {
+        const btn = document.querySelector('[data-delight="favorite"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        try {
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(delight.bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.favorites, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid: delight.bvid }) });
+          }
+        } catch {
           btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
         } finally {
           btn.disabled = false;
@@ -2263,6 +2451,26 @@
       $("#delightReason").textContent = state.delight.reason;
       if ($("#delightStatus")) $("#delightStatus").textContent = state.delight.response_message || "";
       if ($("#delightCount")) $("#delightCount").textContent = `${state.delightIndex + 1}/${state.delights.length}`;
+      // Sync ☆ / ♥ pressed state for the current delight.
+      const delightBvid = state.delight.bvid;
+      const wlBtn = document.querySelector('[data-delight="watch-later"]');
+      if (wlBtn && delightBvid) {
+        wlBtn.setAttribute("aria-pressed", "false");
+        watchLaterStatus(delightBvid).then((res) => {
+          if (state.delight?.bvid === delightBvid && res?.saved) {
+            wlBtn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
+      }
+      const favBtn = document.querySelector('[data-delight="favorite"]');
+      if (favBtn && delightBvid) {
+        favBtn.setAttribute("aria-pressed", "false");
+        favoriteStatus(delightBvid).then((res) => {
+          if (state.delight?.bvid === delightBvid && res?.saved) {
+            favBtn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
+      }
       controls.forEach((btn) => {
         const action = btn.dataset.delight;
         btn.disabled = (action === "prev" && state.delightIndex === 0) || (action === "next" && state.delightIndex === state.delights.length - 1);
@@ -2628,6 +2836,8 @@
 
     safeBind("#profileBtn", "click", openProfilePage);
     safeBind("#homeBtn", "click", openHomePage);
+    safeBind("#watchLaterBtn", "click", openWatchLaterPage);
+    safeBind("#favoritesBtn", "click", openFavoritesPage);
     safeBind("#profileMemoryMoreBtn", "click", loadMoreProfileMemory);
     safeBind("#chatBtn", "click", openChatPage);
     safeBind("#messagesBtn", "click", () => {

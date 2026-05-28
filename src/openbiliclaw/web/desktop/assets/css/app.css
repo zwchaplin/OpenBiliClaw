@@ -152,7 +152,7 @@
     .message-dot[hidden] { display: none; }
     [hidden] { display: none !important; }
     :root { --side-drawer-width: 312px; --topbar-height: 75px; }
-    .layout, .fatal-banner { transition: transform var(--motion-base) var(--ease-standard); }
+    .layout, .fatal-banner { transition: transform var(--motion-base) var(--ease-standard), margin var(--motion-base) var(--ease-standard), width var(--motion-base) var(--ease-standard); }
     .icon-btn, .pill-btn { border: 1px solid var(--border-soft); background: var(--surface); color: var(--fg-2); border-radius: var(--radius-pill); min-height: 40px; padding: 0 var(--space-4); box-shadow: var(--elev-ring); }
     .icon-btn { min-width: 40px; padding: 0; }
     .nav-compact { min-width: 64px; padding-inline: var(--space-3); }
@@ -161,8 +161,10 @@
     .side-drawer-scrim { display: none; }
     .side-drawer-panel { width: var(--side-drawer-width); height: 100%; display: grid; align-content: start; gap: 0; padding: 18px var(--space-4); overflow: auto; background: var(--bg); color: var(--fg); border-right: 1px solid var(--border-soft); box-shadow: 1px 0 0 var(--border); transform: translateX(-100%); transition: transform var(--motion-base) var(--ease-standard); pointer-events: auto; }
     .side-drawer.is-open .side-drawer-panel { transform: translateX(0); }
+    /* Push (not overlay): content yields the full drawer width and re-centers
+       in the remaining space, so the drawer never covers the content. */
     body.side-drawer-open .layout,
-    body.side-drawer-open .fatal-banner { transform: translateX(calc(var(--side-drawer-width) / 2)); }
+    body.side-drawer-open .fatal-banner { transform: none; margin-left: var(--side-drawer-width); width: calc(100% - var(--side-drawer-width)); max-width: none; }
     .side-drawer-nav { display: grid; gap: 4px; padding: 0 0 var(--space-4); border-bottom: 1px solid var(--border-soft); }
     .side-drawer-nav .nav-action { width: 100%; min-height: 40px; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-3); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--fg-2); box-shadow: none; text-align: left; }
     .side-drawer-nav .nav-action:hover { background: color-mix(in oklab, var(--surface-warm), var(--accent) 6%); color: var(--fg); }
@@ -278,7 +280,7 @@
     .delight-main-actions.is-composing .comment-field { max-width: 100%; opacity: 1; transform: translateX(0); pointer-events: auto; }
     .delight-main-actions .chat-action.is-send { width: 38px; min-width: 38px; padding: 0; }
     .delight-main-actions .chat-action.is-send svg { width: 17px; height: 17px; stroke-width: 2.2; }
-    .delight-feedback-actions.card-feedback-icons { order: 1; flex: 0 0 128px; justify-self: auto; justify-content: center; max-width: none; width: 128px; height: 40px; min-height: 40px; padding: 3px 6px; gap: 5px; }
+    .delight-feedback-actions.card-feedback-icons { order: 1; flex: 0 0 auto; justify-self: auto; justify-content: center; max-width: none; width: auto; height: 40px; min-height: 40px; padding: 3px 8px; gap: 6px; }
     .delight-actions .small-btn { min-width: 0; }
     .delight-feedback-actions .feedback-icon-btn { flex: 0 0 26px; width: 26px; height: 26px; min-height: 26px; }
     .delight-feedback-actions .feedback-icon-btn svg { width: 14px; height: 14px; }
@@ -304,7 +306,7 @@
     .card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
     .video-card .card-actions { display: grid; grid-template-columns: auto minmax(96px, auto); align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: 0; transition: grid-template-columns var(--motion-base) var(--ease-standard), gap var(--motion-base) var(--ease-standard); }
     .video-card .card-actions.is-composing { grid-template-columns: minmax(0, 1fr) 38px; gap: var(--space-2); }
-    .card-feedback-icons { grid-column: 1; grid-row: 1; display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; max-width: 128px; padding: 3px 7px; border: 1px solid var(--border-soft); border-radius: var(--radius-pill); background: var(--bg); opacity: 1; transform: scale(1); overflow: hidden; transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard), max-width var(--motion-base) var(--ease-standard), padding var(--motion-base) var(--ease-standard), border-color var(--motion-base) var(--ease-standard); }
+    .card-feedback-icons { grid-column: 1; grid-row: 1; display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; max-width: 220px; padding: 3px 7px; border: 1px solid var(--border-soft); border-radius: var(--radius-pill); background: var(--bg); opacity: 1; transform: scale(1); overflow: hidden; transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard), max-width var(--motion-base) var(--ease-standard), padding var(--motion-base) var(--ease-standard), border-color var(--motion-base) var(--ease-standard); }
     .card-actions.is-composing .card-feedback-icons { max-width: 0; padding-inline: 0; border-color: transparent; opacity: 0; transform: scale(0.9); pointer-events: none; }
     .comment-field { grid-column: 1; grid-row: 1; min-width: 0; max-width: 0; opacity: 0; transform: translateX(8px); pointer-events: none; overflow: hidden; transition: opacity var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard), max-width var(--motion-base) var(--ease-standard); }
     .card-actions.is-composing .comment-field { max-width: 100%; opacity: 1; transform: translateX(0); pointer-events: auto; }
@@ -590,7 +592,7 @@
       .delight-actions { flex-direction: row; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
       .delight-actions.is-composing { gap: 0; }
       .delight-main-actions { order: 2; flex: 1 1 auto; grid-template-columns: minmax(72px, .82fr) minmax(76px, .88fr); gap: 6px; transition: none; }
-      .delight-feedback-actions.card-feedback-icons { order: 1; flex: 0 1 116px; width: 116px; max-width: 116px; height: 40px; min-height: 40px; margin-left: 0; align-self: center; justify-content: center; padding: 3px 5px; transition: none; }
+      .delight-feedback-actions.card-feedback-icons { order: 1; flex: 0 0 auto; width: auto; max-width: none; height: 40px; min-height: 40px; margin-left: 0; align-self: center; justify-content: center; padding: 3px 8px; transition: none; }
       .delight-actions .delight-main-actions .small-btn,
       .delight-actions .delight-main-actions [data-delight="view"],
       .delight-actions .delight-main-actions .comment-field,
@@ -619,3 +621,35 @@
 [data-od-id="path-0-1-0-0-0-1"] { font-size: 30px !important }
 [data-od-id="hero"] { font-size: 16px !important }
 [data-od-id="path-0-1-0-0-1-1"] { font-size: 20px !important }
+
+/* ── Saved pages (稍后再看 / 收藏) ───────────────────────────── */
+/* Count badge hugs its label (was margin-left:auto, which flung it to the far
+   right of the 264px nav item and left a big gap after short labels). */
+.nav-count-badge { margin-left: 2px; min-width: 18px; height: 18px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; border-radius: 9px; background: var(--accent, #c8553d); color: #fff; }
+.saved-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-4, 16px); }
+.saved-page .saved-card { cursor: default; }
+.saved-card-actions { display: flex; justify-content: flex-end; }
+/* Remove is a secondary action — keep it a quiet ghost button, not the loud
+   accent pill that `.video-card .small-btn` defaults to (matches mobile's
+   subtle ×). Specificity must beat `.video-card .small-btn`. */
+.saved-page .saved-card .saved-remove {
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  color: var(--fg-2);
+  box-shadow: none;
+}
+.saved-page .saved-card .saved-remove:hover {
+  border-color: var(--accent, #c8553d);
+  color: var(--accent, #c8553d);
+  background: color-mix(in oklab, var(--surface), var(--accent, #c8553d) 8%);
+}
+.saved-page .saved-empty { padding: 64px 24px; text-align: center; color: var(--fg-2); }
+
+/* ── Save toggles in the feedback row (稍后再看 = 时钟 / 收藏 = 星星) ──
+   Same SVG icon family as like/dislike/dismiss, shown inline in the action
+   row. Active state: watch-later clock turns accent; favorite star fills
+   gold. State is driven by aria-pressed (no glyph swapping). */
+.watch-later-btn[aria-pressed="true"] { color: var(--accent, #c8553d); }
+.favorite-btn[aria-pressed="true"] { color: #e8a33d; }
+.favorite-btn[aria-pressed="true"] svg { fill: currentColor; }
+.nav-glyph svg { width: 16px; height: 16px; }

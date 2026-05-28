@@ -17,12 +17,11 @@
 
 ---
 
-## 📌 v0.3.91 / extension v0.3.49 Highlights (2026-05-25)
+## 📌 v0.3.93 / extension v0.3.52 Highlights (2026-05-29)
 
-- **🔮 Challenge probes** — interest probes now use near / lateral / bridge / wildcard distance bands; the regular near pool stays at 5 active probes, while challenge probes get their own 3 active slots.
-- **🎬 YouTube recommendation clicks** — recommendation cards and mobile Web now preserve `content_id / content_url / source_platform`, so profile events no longer turn YouTube IDs into Bilibili URLs.
-- **🧪 Weak-positive buffer** — tentative "maybe interesting" feedback enters a short-term buffer before becoming a formal interest.
-- **🛡️ Amplification guardrails** — newly confirmed directions can influence exploration without taking over an entire refresh.
+- **♥ Standalone Favorites** — a new "Favorites" collection, fully independent from "Watch Later": tap ♡ on any recommendation or delight card to keep content permanently.
+- **📚 Saved/Watch-later browsing pages on all surfaces** — mobile, extension, and desktop now have dedicated entries to browse what you've favorited and saved — finally one place to see your collected content.
+- **🗂️ Count badges & per-item removal** — desktop sidebar Favorites/Watch-later entries show count badges; list items open or remove individually.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
 

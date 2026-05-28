@@ -1210,7 +1210,9 @@ class TestBackendAPI:
         from fastapi.testclient import TestClient
 
         class FakeDatabase:
-            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+            def get_recommendations(
+                self, limit: int = 20, *, exclude_processed: bool = False
+            ) -> list[dict[str, object]]:
                 # v0.3.18: the endpoint pulls 2x the visible window so
                 # the per-franchise cap still has 20 survivors after
                 # dropping over-represented IPs.
@@ -1248,7 +1250,9 @@ class TestBackendAPI:
         from fastapi.testclient import TestClient
 
         class FakeDatabase:
-            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+            def get_recommendations(
+                self, limit: int = 20, *, exclude_processed: bool = False
+            ) -> list[dict[str, object]]:
                 # Five 原神 rows + one 番茄炒蛋. Without the franchise
                 # cap, the response would carry all 5 原神; with cap=2,
                 # only 2 survive.
@@ -1467,7 +1471,9 @@ class TestBackendAPI:
         from fastapi.testclient import TestClient
 
         class FakeDatabase:
-            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+            def get_recommendations(
+                self, limit: int = 20, *, exclude_processed: bool = False
+            ) -> list[dict[str, object]]:
                 assert limit in {10, 20}
                 return [
                     {

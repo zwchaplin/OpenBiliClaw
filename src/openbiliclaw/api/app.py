@@ -48,6 +48,10 @@ from openbiliclaw.api.models import (
     DouyinSourceConfigOut,
     EmbeddingConfigOut,
     EventIngestResponse,
+    FavoriteAddIn,
+    FavoriteItem,
+    FavoriteListResponse,
+    FavoriteStateResponse,
     FeedbackIn,
     FeedbackResponse,
     HealthResponse,
@@ -1844,8 +1848,8 @@ def create_app(
 
     @app.get("/api/watch-later", response_model=WatchLaterListResponse)
     async def watch_later_list(
-        limit: int = 50,
-        offset: int = 0,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
     ) -> WatchLaterListResponse:
         rows = ctx.database.list_watch_later(limit=limit, offset=offset)
         return WatchLaterListResponse(
@@ -1862,6 +1866,54 @@ def create_app(
                 for row in rows
             ],
             total=ctx.database.count_watch_later(),
+        )
+
+    # ── Favorites (收藏夹) ────────────────────────────────────────
+
+    def _favorite_state(bvid: str) -> FavoriteStateResponse:
+        return FavoriteStateResponse(
+            saved=ctx.database.is_in_favorites(bvid),
+            total=ctx.database.count_favorites(),
+        )
+
+    @app.post("/api/favorites", response_model=FavoriteStateResponse)
+    async def favorite_add(payload: FavoriteAddIn) -> FavoriteStateResponse:
+        bvid = payload.bvid.strip()
+        if not bvid:
+            raise HTTPException(status_code=422, detail="bvid is required")
+        ctx.database.add_to_favorites(bvid, note=payload.note.strip())
+        return _favorite_state(bvid)
+
+    @app.delete("/api/favorites/{bvid}", response_model=FavoriteStateResponse)
+    async def favorite_remove(bvid: str) -> FavoriteStateResponse:
+        normalized = bvid.strip()
+        ctx.database.remove_from_favorites(normalized)
+        return _favorite_state(normalized)
+
+    @app.get("/api/favorites/{bvid}", response_model=FavoriteStateResponse)
+    async def favorite_status(bvid: str) -> FavoriteStateResponse:
+        return _favorite_state(bvid.strip())
+
+    @app.get("/api/favorites", response_model=FavoriteListResponse)
+    async def favorite_list(
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> FavoriteListResponse:
+        rows = ctx.database.list_favorites(limit=limit, offset=offset)
+        return FavoriteListResponse(
+            items=[
+                FavoriteItem(
+                    bvid=str(row.get("bvid", "")),
+                    title=str(row.get("title", "")),
+                    up_name=str(row.get("up_name", "")),
+                    cover_url=str(row.get("cover_url", "")),
+                    content_url=str(row.get("content_url", "")),
+                    source_platform=str(row.get("source_platform", "") or "bilibili"),
+                    added_at=str(row.get("added_at", "")),
+                )
+                for row in rows
+            ],
+            total=ctx.database.count_favorites(),
         )
 
     @app.get("/api/activity-feed", response_model=ActivityFeedResponse)

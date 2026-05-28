@@ -70,6 +70,10 @@ import {
   addToWatchLater,
   removeFromWatchLater,
   watchLaterStatus,
+  addToFavorite,
+  removeFromFavorite,
+  favoriteStatus,
+  fetchFavorites,
 } from "./popup-api.js";
 
 const state = {
@@ -142,11 +146,15 @@ const elements = {
   poolTopics: document.getElementById("poolTopics"),
   delightSlot: document.getElementById("delightSlot"),
   tabRecommend: document.getElementById("tabRecommend"),
+  tabFavorites: document.getElementById("tabFavorites"),
   tabProfile: document.getElementById("tabProfile"),
   tabChat: document.getElementById("tabChat"),
   viewRecommend: document.getElementById("viewRecommend"),
+  viewFavorites: document.getElementById("viewFavorites"),
   viewProfile: document.getElementById("viewProfile"),
   viewChat: document.getElementById("viewChat"),
+  favoritesList: document.getElementById("favoritesList"),
+  favoritesEmpty: document.getElementById("favoritesEmpty"),
   profileEmpty: document.getElementById("profileEmpty"),
   profileEmptyTitle: document.getElementById("profileEmptyTitle"),
   profileEmptyText: document.getElementById("profileEmptyText"),
@@ -378,6 +386,7 @@ function setActiveTab(tabName) {
 
   const tabs = [
     ["recommend", elements.tabRecommend, elements.viewRecommend],
+    ["favorites", elements.tabFavorites, elements.viewFavorites],
     ["profile", elements.tabProfile, elements.viewProfile],
     ["chat", elements.tabChat, elements.viewChat],
   ];
@@ -399,6 +408,74 @@ function setActiveTab(tabName) {
   if (tabName === "recommend") {
     queueRecommendationLoadCheck();
   }
+  if (tabName === "favorites") {
+    void loadFavorites();
+  }
+}
+
+// ── Favorites view (收藏夹) ─────────────────────────────────────
+async function loadFavorites() {
+  const list = elements.favoritesList;
+  const empty = elements.favoritesEmpty;
+  if (!(list instanceof HTMLElement)) return;
+  let data = null;
+  try {
+    data = await fetchFavorites(100, 0);
+  } catch {
+    data = null;
+  }
+  const items = Array.isArray(data?.items) ? data.items : [];
+  list.replaceChildren();
+  if (!items.length) {
+    if (empty instanceof HTMLElement) empty.hidden = false;
+    return;
+  }
+  if (empty instanceof HTMLElement) empty.hidden = true;
+  for (const item of items) {
+    list.appendChild(buildFavoriteCard(item));
+  }
+}
+
+function buildFavoriteCard(item) {
+  const card = document.createElement("article");
+  card.className = "saved-card";
+  card.dataset.bvid = item.bvid;
+
+  const body = document.createElement("button");
+  body.type = "button";
+  body.className = "saved-card-open";
+  const title = document.createElement("p");
+  title.className = "saved-card-title";
+  title.textContent = item.title || item.bvid;
+  const up = document.createElement("p");
+  up.className = "saved-card-up";
+  up.textContent = item.up_name || "";
+  body.append(title, up);
+  body.addEventListener("click", () => {
+    const url = buildContentUrl(item);
+    if (url) window.open(url, "_blank");
+  });
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "saved-card-remove";
+  remove.textContent = "移除";
+  remove.title = "取消收藏";
+  remove.addEventListener("click", async () => {
+    remove.disabled = true;
+    try {
+      await removeFromFavorite(item.bvid);
+      card.remove();
+      if (!elements.favoritesList?.children.length && elements.favoritesEmpty instanceof HTMLElement) {
+        elements.favoritesEmpty.hidden = false;
+      }
+    } catch {
+      remove.disabled = false;
+    }
+  });
+
+  card.append(body, remove);
+  return card;
 }
 
 function showRecommendationEmptyState(title, message) {
@@ -3267,15 +3344,17 @@ function renderDelightSlot() {
       },
     );
 
-    const starButton = (() => {
+    // \u7A0D\u540E\u518D\u770B (\u2606) \u2014 ephemeral queue
+    // \u7A0D\u540E\u518D\u770B = \u65F6\u949F\u56FE\u6807\uFF08\u72B6\u6001\u8D70 aria-pressed + CSS\uFF0C\u4E0D\u505A\u5B57\u5F62\u66FF\u6362\uFF09
+    const delightWatchLaterButton = (() => {
       let busy = false;
       let saved = false;
-      const btn = createActionButton("\u2606", "action-button action-secondary delight-banner-action", async () => {
+      const btn = createActionButton("", "action-button action-secondary delight-banner-action delight-save-toggle watch-later-btn", async () => {
         if (busy) return;
         busy = true;
         const wasSaved = saved;
         saved = !wasSaved;
-        btn.textContent = saved ? "\u2605" : "\u2606";
+        btn.setAttribute("aria-pressed", saved ? "true" : "false");
         try {
           if (wasSaved) {
             await removeFromWatchLater(delight.bvid);
@@ -3284,16 +3363,54 @@ function renderDelightSlot() {
           }
         } catch {
           saved = wasSaved;
-          btn.textContent = saved ? "\u2605" : "\u2606";
+          btn.setAttribute("aria-pressed", saved ? "true" : "false");
         } finally {
           busy = false;
         }
       });
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>';
+      btn.setAttribute("aria-pressed", "false");
       btn.title = "\u7A0D\u540E\u518D\u770B";
       watchLaterStatus(delight.bvid).then((res) => {
         if (res && res.saved) {
           saved = true;
-          btn.textContent = "\u2605";
+          btn.setAttribute("aria-pressed", "true");
+          btn.title = "\u53D6\u6D88\u7A0D\u540E\u518D\u770B";
+        }
+      }).catch(() => {});
+      return btn;
+    })();
+
+    // \u6536\u85CF = \u661F\u661F\u56FE\u6807\uFF0C\u4E0E\u7A0D\u540E\u518D\u770B\u76F8\u4E92\u72EC\u7ACB
+    const delightFavoriteButton = (() => {
+      let busy = false;
+      let saved = false;
+      const btn = createActionButton("", "action-button action-secondary delight-banner-action delight-save-toggle favorite-btn", async () => {
+        if (busy) return;
+        busy = true;
+        const wasSaved = saved;
+        saved = !wasSaved;
+        btn.setAttribute("aria-pressed", saved ? "true" : "false");
+        try {
+          if (wasSaved) {
+            await removeFromFavorite(delight.bvid);
+          } else {
+            await addToFavorite(delight.bvid);
+          }
+        } catch {
+          saved = wasSaved;
+          btn.setAttribute("aria-pressed", saved ? "true" : "false");
+        } finally {
+          busy = false;
+        }
+      });
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>';
+      btn.setAttribute("aria-pressed", "false");
+      btn.title = "\u6536\u85CF";
+      favoriteStatus(delight.bvid).then((res) => {
+        if (res && res.saved) {
+          saved = true;
+          btn.setAttribute("aria-pressed", "true");
           btn.title = "\u53D6\u6D88\u6536\u85CF";
         }
       }).catch(() => {});
@@ -3305,7 +3422,14 @@ function renderDelightSlot() {
       likeButton.disabled = true;
     }
 
-    actions.append(openButton, likeButton, starButton, rejectButton, chatButton);
+    actions.append(
+      openButton,
+      likeButton,
+      delightWatchLaterButton,
+      delightFavoriteButton,
+      rejectButton,
+      chatButton,
+    );
     body.append(actions);
 
     if (delight.composer_open) {
@@ -4234,6 +4358,7 @@ async function handleManualRefresh() {
 function bindTabs() {
   const bindings = [
     [elements.tabRecommend, "recommend"],
+    [elements.tabFavorites, "favorites"],
     [elements.tabProfile, "profile"],
     [elements.tabChat, "chat"],
   ];

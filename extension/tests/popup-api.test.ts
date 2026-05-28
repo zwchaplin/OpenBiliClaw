@@ -11,6 +11,7 @@ import {
   fetchConfig,
   fetchProfileSummary,
   fetchSourceShareSuggestion,
+  fetchWatchLater,
   readCachedConfigSnapshot,
   requestJson,
   reshuffleRecommendations,
@@ -211,6 +212,72 @@ test("fetchActivityFeed loads popup activity summaries", async () => {
     headline: "阿B 刚记下了你最近更吃深拆",
     items: [],
   });
+});
+
+test("watch-later popup API helpers use the shared backend endpoint", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return url.includes("?")
+          ? { items: [{ bvid: "BV1WL" }], total: 1 }
+          : { saved: true, total: 1 };
+      },
+    };
+  };
+
+  const { addToWatchLater, removeFromWatchLater, watchLaterStatus } = await import(
+    "../popup/popup-api.js"
+  );
+
+  await addToWatchLater("BV1WL");
+  await removeFromWatchLater("BV1WL");
+  await watchLaterStatus("BV1WL");
+  const list = await fetchWatchLater(20, 40);
+
+  assert.deepEqual(list, { items: [{ bvid: "BV1WL" }], total: 1 });
+  assert.equal(calls[0].url, "http://127.0.0.1:8420/api/watch-later");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.body, JSON.stringify({ bvid: "BV1WL" }));
+  assert.equal(calls[1].url, "http://127.0.0.1:8420/api/watch-later/BV1WL");
+  assert.equal(calls[1].options.method, "DELETE");
+  assert.equal(calls[2].url, "http://127.0.0.1:8420/api/watch-later/BV1WL");
+  assert.equal(calls[3].url, "http://127.0.0.1:8420/api/watch-later?limit=20&offset=40");
+});
+
+test("favorites popup API helpers use the shared backend endpoint", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return url.includes("?")
+          ? { items: [{ bvid: "BV1FAV" }], total: 1 }
+          : { saved: true, total: 1 };
+      },
+    };
+  };
+
+  const { addToFavorite, removeFromFavorite, favoriteStatus, fetchFavorites } = await import(
+    "../popup/popup-api.js"
+  );
+
+  await addToFavorite("BV1FAV");
+  await removeFromFavorite("BV1FAV");
+  await favoriteStatus("BV1FAV");
+  const list = await fetchFavorites(20, 40);
+
+  assert.deepEqual(list, { items: [{ bvid: "BV1FAV" }], total: 1 });
+  assert.equal(calls[0].url, "http://127.0.0.1:8420/api/favorites");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.body, JSON.stringify({ bvid: "BV1FAV" }));
+  assert.equal(calls[1].url, "http://127.0.0.1:8420/api/favorites/BV1FAV");
+  assert.equal(calls[1].options.method, "DELETE");
+  assert.equal(calls[2].url, "http://127.0.0.1:8420/api/favorites/BV1FAV");
+  assert.equal(calls[3].url, "http://127.0.0.1:8420/api/favorites?limit=20&offset=40");
 });
 
 test("fetchPendingDelight loads the current pending delight candidate", async () => {

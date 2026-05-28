@@ -3569,6 +3569,60 @@
       font-style: italic;
     }
 
+    /* delight 横幅的 稍后再看=时钟 / 收藏=星星 SVG 图标按钮 */
+    .delight-save-toggle { display: inline-flex; align-items: center; justify-content: center; }
+    .delight-save-toggle svg { width: 16px; height: 16px; }
+    .delight-save-toggle.watch-later-btn[aria-pressed="true"] { color: var(--brand, #fb7299); border-color: var(--brand, #fb7299); }
+    .delight-save-toggle.favorite-btn[aria-pressed="true"] { color: #e8a33d; border-color: #e8a33d; }
+    .delight-save-toggle.favorite-btn[aria-pressed="true"] svg { fill: currentColor; }
+
+    /* ── Favorites view (收藏夹) ───────────────────────────── */
+    .saved-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--border, rgba(0,0,0,0.08));
+      border-radius: 12px;
+      background: var(--surface, #fff);
+      margin-bottom: 8px;
+    }
+    .saved-card-open {
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+    }
+    .saved-card-title {
+      font-size: 13px;
+      line-height: 1.35;
+      max-height: 2.7em;
+      overflow: hidden;
+      color: var(--text, #1a1a1a);
+    }
+    .saved-card-up {
+      margin-top: 3px;
+      font-size: 11px;
+      color: var(--text-muted, #888);
+    }
+    .saved-card-remove {
+      flex-shrink: 0;
+      border: none;
+      background: transparent;
+      color: var(--text-muted, #888);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 8px;
+    }
+    .saved-card-remove:hover {
+      background: var(--brand-soft, rgba(200,85,61,0.1));
+      color: var(--brand, #c8553d);
+    }
+
   </style>
 </head>
 <body>
@@ -3610,6 +3664,7 @@
     <div class="tabs-shell">
       <div class="tab-bar" role="tablist" aria-label="Popup views">
         <button id="tabRecommend" class="tab-button is-active" type="button" role="tab" aria-selected="true" aria-controls="viewRecommend">推荐</button>
+        <button id="tabFavorites" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="viewFavorites">收藏</button>
         <button id="tabProfile" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="viewProfile">我的画像</button>
         <button id="tabChat" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="viewChat">聊聊你的想法</button>
       </div>
@@ -3652,6 +3707,19 @@
           <p id="emptyText">稍等一下，新的推荐马上来。</p>
         </div>
         <div id="recommendationList" class="recommendation-list"></div>
+      </section>
+
+      <section id="viewFavorites" class="view" role="tabpanel" aria-labelledby="tabFavorites" hidden>
+        <div class="view-intro">
+          <p class="view-kicker">Favorites</p>
+          <h2>我的收藏</h2>
+          <p class="view-subtitle">点 ♥ 收藏的内容会长期留在这里，和稍后再看互相独立。</p>
+        </div>
+        <div id="favoritesEmpty" class="empty-state" hidden>
+          <h3>还没有收藏</h3>
+          <p>在推荐或惊喜里点星标，收藏的内容就会出现在这里。</p>
+        </div>
+        <div id="favoritesList" class="recommendation-list"></div>
       </section>
 
       <section id="viewProfile" class="view" role="tabpanel" aria-labelledby="tabProfile" hidden>

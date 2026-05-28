@@ -279,6 +279,7 @@ class Database:
         self._ensure_llm_usage_cache_columns()
         self._ensure_chat_turns_table()
         self._ensure_watch_later_table()
+        self._ensure_favorites_table()
 
         # Set schema version
         self._conn.execute(
@@ -1323,9 +1324,7 @@ class Database:
                 pending_count += 1
 
         return {
-            "available": self.count_pool_candidates(
-                xhs_self_nickname=xhs_self_nickname
-            ),
+            "available": self.count_pool_candidates(xhs_self_nickname=xhs_self_nickname),
             "raw": raw_count,
             "pending": pending_count,
         }
@@ -2606,9 +2605,7 @@ class Database:
         """
         self._ensure_fresh_read()
         processed_clause = (
-            "AND (r.feedback_type IS NULL OR r.feedback_type = '')"
-            if exclude_processed
-            else ""
+            "AND (r.feedback_type IS NULL OR r.feedback_type = '')" if exclude_processed else ""
         )
         cursor = self.conn.execute(
             f"""
@@ -3068,9 +3065,7 @@ class Database:
         row = self.conn.execute("SELECT COUNT(*) FROM watch_later").fetchone()
         return int(row[0]) if row else 0
 
-    def list_watch_later(
-        self, limit: int = 50, offset: int = 0
-    ) -> list[dict[str, Any]]:
+    def list_watch_later(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Return bookmarked videos with content_cache metadata, newest first."""
         cursor = self.conn.execute(
             """
@@ -3086,6 +3081,82 @@ class Database:
             FROM watch_later AS w
             LEFT JOIN content_cache AS c ON c.bvid = w.bvid
             ORDER BY w.added_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def _ensure_favorites_table(self) -> None:
+        """Create the favorites (收藏夹) table for existing databases.
+
+        Favorites are a permanent, curated keep — distinct from the
+        ephemeral ``watch_later`` queue. The two tables are independent so
+        a video can be in one, both, or neither.
+        """
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                bvid     TEXT PRIMARY KEY,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                note     TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_favorites_added
+                ON favorites(added_at DESC);
+        """)
+
+    # ── Favorites CRUD ───────────────────────────────────────────
+
+    def add_to_favorites(self, bvid: str, note: str = "") -> bool:
+        """Save a video to favorites. Returns True if newly inserted."""
+        self._execute_write(
+            """
+            INSERT INTO favorites (bvid, note)
+            VALUES (?, ?)
+            ON CONFLICT(bvid) DO UPDATE SET
+                added_at = CURRENT_TIMESTAMP,
+                note = excluded.note
+            """,
+            (bvid.strip(), note),
+        )
+        return self.conn.total_changes > 0
+
+    def remove_from_favorites(self, bvid: str) -> bool:
+        """Remove a favorite. Returns True if a row was deleted."""
+        self._execute_write(
+            "DELETE FROM favorites WHERE bvid = ?",
+            (bvid.strip(),),
+        )
+        return self.conn.total_changes > 0
+
+    def is_in_favorites(self, bvid: str) -> bool:
+        """Check whether a video is favorited."""
+        row = self.conn.execute(
+            "SELECT 1 FROM favorites WHERE bvid = ?",
+            (bvid.strip(),),
+        ).fetchone()
+        return row is not None
+
+    def count_favorites(self) -> int:
+        """Return total number of favorited videos."""
+        row = self.conn.execute("SELECT COUNT(*) FROM favorites").fetchone()
+        return int(row[0]) if row else 0
+
+    def list_favorites(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Return favorited videos with content_cache metadata, newest first."""
+        cursor = self.conn.execute(
+            """
+            SELECT
+                f.bvid,
+                f.added_at,
+                f.note,
+                COALESCE(c.title, '') AS title,
+                COALESCE(c.up_name, '') AS up_name,
+                COALESCE(c.cover_url, '') AS cover_url,
+                COALESCE(c.content_url, '') AS content_url,
+                COALESCE(c.source_platform, '') AS source_platform
+            FROM favorites AS f
+            LEFT JOIN content_cache AS c ON c.bvid = f.bvid
+            ORDER BY f.added_at DESC
             LIMIT ? OFFSET ?
             """,
             (limit, offset),

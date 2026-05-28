@@ -4,6 +4,20 @@
 
 ---
 
+## v0.3.93 / extension v0.3.52: 独立收藏夹与稍后再看浏览页（2026-05-29）
+
+- 新增独立「收藏夹」功能：`favorites` SQLite 表（`_ensure_favorites_table` 自动 migration）+ 5 个 DB 方法 + 4 个 API 端点（POST / DELETE / GET 单条 + GET 列表，列表带 `limit/offset` 422 校验）。收藏与稍后再看是两个互相独立的本地集合，一个视频可同时/分别/都不在其中。Pydantic 模型 `Favorite{AddIn,StateResponse,Item,ListResponse}`。
+- 三端均补齐收藏入口 + 浏览页：移动 Web 底部导航新增「收藏」tab（`initFavoritesView`）、桌面 Web 侧边栏「我的收藏」页（`favoritesBtn/favoritesPage/favoritesCountBadge`）、插件 popup 新增「收藏」tab（`viewFavorites/favoritesList`/`loadFavorites`）。推荐卡与 delight 卡均加 ♡/♥ toggle（乐观 UI、失败回退、懒加载状态）。
+- 补完稍后再看「浏览页」（此前只有 ☆ toggle）：移动 Web「稍后」tab、桌面 Web「稍后再看」页 + 数量徽章、`fetchWatchLater` 列表 helper。移动端 `views/saved.js` 与桌面 `renderSavedList` 让稍后再看 / 收藏复用同一套已存内容列表组件。
+- 修复 `GET /api/watch-later` 缺少分页参数校验：`limit/offset` 改用 `Query(ge=...)`，非法值返回 422。
+- 测试：新增 `tests/test_favorites_api.py`（CRUD / 分页 / 校验 / 与稍后再看互相独立）+ 6 项扩展前端测试（`web-favorites.test.ts` + popup-api favorites helper）。修复 `test_api_app.py` 中 `FakeDatabase.get_recommendations` mock 缺 `exclude_processed` 参数导致的 2 项历史失败。后端 1793 passed、扩展 344 passed 全绿。
+- 文档：新增 `docs/specs/favorites.md`，更新 `docs/specs/watch-later.md`（浏览页已实现）。
+- UI 打磨（端到端真实数据验收）：
+  - 图标语义统一为 **收藏 = ⭐星星 / 稍后再看 = 🕐时钟**（一眼可辨），全部改用与「点赞/点踩」同款的 SVG 图标族（line-icon），不再用 ☆/♥ Unicode 字形与 SVG 混排。桌面端推荐卡 + 惊喜横幅的收藏/稍后**回到底部反馈行内**和喜欢/不喜欢正常并排展示（先前移到封面右上角的方案因不够美观已撤掉）；状态由 `aria-pressed` + CSS 驱动（星星选中填充金色 `#e8a33d`、时钟选中 accent 色），不再做字形替换。
+  - 移动端推荐卡的收藏/稍后保留封面右上角玻璃态 chip（小屏更省空间），图标同步为时钟/星星 SVG；惊喜 tray 的两个保存键为紧凑 SVG 图标。底部 tab 图标：稍后=🕐、收藏=⭐。
+  - 侧边栏「我的收藏 / 稍后再看」导航、移动端「收藏 / 稍后」列表页的头部与空态图标全部同步为星星 / 时钟；各处空态文案不再提 ☆/♥。
+  - 收藏/稍后浏览页的「移除」由橙色实心按钮改为安静的 ghost 描边按钮。
+
 ## v0.3.92 / extension v0.3.51: OR-join 去重修复与稍后再看功能（2026-05-28）
 
 - 文档：全面重绘 `soul`、`recommendation` 与 Web HTML 三个模块的 HTML 架构图 / 流程图，并在文档导航和架构说明中补齐可视化入口。

@@ -429,3 +429,31 @@ export async function removeFromWatchLater(bvid) {
 export async function watchLaterStatus(bvid) {
   return requestJson(`/watch-later/${encodeURIComponent(bvid)}`);
 }
+
+export async function fetchWatchLater(limit = 50, offset = 0) {
+  return requestJson(`/watch-later?limit=${limit}&offset=${offset}`);
+}
+
+// ── Favorites (收藏夹) ────────────────────────────────────────────
+
+export async function addToFavorite(bvid) {
+  return requestJson("/favorites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bvid }),
+  });
+}
+
+export async function removeFromFavorite(bvid) {
+  return requestJson(`/favorites/${encodeURIComponent(bvid)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function favoriteStatus(bvid) {
+  return requestJson(`/favorites/${encodeURIComponent(bvid)}`);
+}
+
+export async function fetchFavorites(limit = 50, offset = 0) {
+  return requestJson(`/favorites?limit=${limit}&offset=${offset}`);
+}
