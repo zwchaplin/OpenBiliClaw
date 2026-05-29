@@ -52,6 +52,7 @@ SOURCE_LABELS = {
     "feedback": "推荐反馈",
     "chat": "聊天",
     "profile_refresh": "聚合观察",
+    "manual": "手动编辑",
 }
 
 

@@ -16,6 +16,8 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
+    from openbiliclaw.soul.overrides import ProfileOverrides
+
 logger = logging.getLogger(__name__)
 _EVENT_TYPES = {
     "view",
@@ -127,6 +129,7 @@ class MemoryManager:
         self._discovery_runtime_state_path = data_dir / "memory" / "discovery_runtime.json"
         self._insight_candidates_path = data_dir / "memory" / "insight_candidates.json"
         self._cognition_updates_path = data_dir / "memory" / "cognition_updates.json"
+        self._profile_overrides_path = data_dir / "memory" / "profile_overrides.json"
         self._working_memory: dict[str, Any] = {}  # Session-only
         # Optional callback that fires after the soul layer is saved or
         # ``sync_profile_files`` runs. The runtime context wires this to
@@ -435,6 +438,33 @@ class MemoryManager:
         self._cognition_updates_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self._cognition_updates_path, "w", encoding="utf-8") as file:
             json.dump(updates, file, ensure_ascii=False, indent=2)
+
+    def load_profile_overrides(self) -> ProfileOverrides:
+        """Load user-authored profile overrides from disk.
+
+        Returns an empty ``ProfileOverrides`` when the file is missing or
+        unreadable, so the effective profile equals the AI profile until the
+        user makes their first edit (backward-compatible).
+        """
+        from openbiliclaw.soul.overrides import ProfileOverrides
+
+        if not self._profile_overrides_path.exists():
+            return ProfileOverrides()
+        with open(self._profile_overrides_path, encoding="utf-8") as file:
+            loaded = json.load(file)
+        return ProfileOverrides.from_dict(loaded)
+
+    def save_profile_overrides(self, overrides: ProfileOverrides) -> None:
+        """Persist user-authored profile overrides and notify listeners.
+
+        Notifying here means an edit lands on both surfaces (popup + web)
+        via the same ``profile_updated`` channel used by every other
+        profile-mutating path.
+        """
+        self._profile_overrides_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._profile_overrides_path, "w", encoding="utf-8") as file:
+            json.dump(overrides.to_dict(), file, ensure_ascii=False, indent=2)
+        self._notify_profile_changed()
 
     def get_layer(self, name: str) -> MemoryLayer:
         """Get a specific memory layer by name."""

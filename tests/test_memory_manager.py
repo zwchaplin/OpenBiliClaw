@@ -20,6 +20,26 @@ def test_initialize_sets_up_database(tmp_path: Path) -> None:
     assert events == []
 
 
+def test_profile_overrides_roundtrip(tmp_path: Path) -> None:
+    from openbiliclaw.soul.overrides import ListEdit, ProfileOverrides
+
+    memory = MemoryManager(tmp_path)
+    memory.initialize()
+
+    ov = ProfileOverrides(list_edits={"core.core_traits": ListEdit(add=["务实"])})
+    memory.save_profile_overrides(ov)
+
+    loaded = memory.load_profile_overrides()
+    assert loaded.list_edits["core.core_traits"].add == ["务实"]
+
+
+def test_load_profile_overrides_missing_returns_empty(tmp_path: Path) -> None:
+    memory = MemoryManager(tmp_path)
+    memory.initialize()
+
+    assert memory.load_profile_overrides().is_empty()
+
+
 @pytest.mark.asyncio
 async def test_propagate_event_persists_to_sqlite(tmp_path: Path) -> None:
     memory = MemoryManager(tmp_path)
