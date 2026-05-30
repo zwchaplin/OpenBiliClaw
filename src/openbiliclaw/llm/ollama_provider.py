@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
-from .base import LLMProviderError, LLMResponse, LLMTimeoutError
+from .base import LLMProviderError, LLMResponse, LLMResponseError, LLMTimeoutError
 from .openai_provider import OpenAIProvider
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class OllamaProvider(OpenAIProvider):
         model: str = "llama3",
         base_url: str = "http://localhost:11434/v1",
         timeout: float = 300.0,
+        num_ctx: int = 0,
     ) -> None:
         super().__init__(
             api_key=api_key,
@@ -48,6 +50,14 @@ class OllamaProvider(OpenAIProvider):
             timeout=timeout,
         )
         self._embed_timeout = timeout
+        # v0.3.x+: when >0, chat completions route through Ollama's *native*
+        # ``/api/chat`` endpoint so we can pass ``options.num_ctx``. The
+        # OpenAI-compat ``/v1`` shim silently DROPS ``num_ctx`` (verified:
+        # the model stays loaded at the server default, usually 4096), which
+        # truncates large batch prompts mid-schema and makes weak models
+        # emit unparseable / repeated JSON. 0 keeps the OpenAI-compat path
+        # (unchanged behaviour) — see _complete_native.
+        self._num_ctx = max(0, int(num_ctx))
 
     async def complete(
         self,
@@ -72,6 +82,14 @@ class OllamaProvider(OpenAIProvider):
         last_error: Exception | None = None
         for attempt in range(1, self._OLLAMA_MAX_RETRIES + 1):
             try:
+                if self._num_ctx > 0:
+                    return await self._complete_native(
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        json_mode=json_mode,
+                        model=model,
+                    )
                 return await super().complete(
                     messages,
                     temperature=temperature,
@@ -99,6 +117,95 @@ class OllamaProvider(OpenAIProvider):
         if last_error is None:  # pragma: no cover — defensive
             raise LLMProviderError("ollama: complete failed without exception")
         raise last_error
+
+    async def _complete_native(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+        model: str | None,
+    ) -> LLMResponse:
+        """Chat completion via Ollama's native ``/api/chat`` endpoint.
+
+        Used only when ``num_ctx > 0``. Unlike the OpenAI-compat ``/v1``
+        shim, the native endpoint honours ``options.num_ctx``, so the full
+        prompt is kept inside the context window instead of being silently
+        truncated at the server default. ``max_tokens`` maps to
+        ``num_predict``; ``json_mode`` maps to ``format="json"`` (Ollama's
+        valid-JSON constraint, the native analogue of the shim's
+        ``response_format=json_object``).
+        """
+        effective_model = (model or "").strip() or self._model
+        payload: dict[str, Any] = {
+            "model": effective_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_ctx": self._num_ctx,
+                "num_predict": max_tokens,
+            },
+        }
+        if json_mode:
+            payload["format"] = "json"
+
+        data = await self._post_chat(payload)
+        content = str((data.get("message") or {}).get("content") or "")
+        if not content.strip() and json_mode:
+            # Mirror the OpenAI-shim path: some models emit empty content
+            # under the JSON constraint. Retry once unconstrained — the
+            # prompt itself already asks for JSON.
+            logger.warning(
+                "ollama: empty content with format=json on /api/chat; "
+                "retrying without the format constraint"
+            )
+            payload.pop("format", None)
+            data = await self._post_chat(payload)
+            content = str((data.get("message") or {}).get("content") or "")
+        if not content.strip():
+            raise LLMResponseError("ollama returned empty content")
+
+        usage = None
+        prompt_tokens = int(data.get("prompt_eval_count", 0) or 0)
+        completion_tokens = int(data.get("eval_count", 0) or 0)
+        if prompt_tokens or completion_tokens:
+            usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+        return LLMResponse(
+            content=content,
+            model=str(data.get("model") or effective_model),
+            provider=self._provider_name,
+            usage=usage,
+            raw=data,
+        )
+
+    async def _post_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST to ``/api/chat`` and return the decoded JSON body.
+
+        Transport / timeout errors propagate so ``complete``'s retry loop
+        can absorb cold-load hiccups; HTTP status errors are mapped to
+        ``LLMProviderError`` (also retried) for parity with the shim path.
+        ``trust_env=False`` bypasses the user's localhost proxy — same fix
+        the ``embed`` path already relies on.
+        """
+        url = f"{self._native_root()}/api/chat"
+        async with httpx.AsyncClient(timeout=self._timeout, trust_env=False) as client:
+            response = await client.post(url, json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise LLMProviderError(
+                    f"ollama: /api/chat returned HTTP {exc.response.status_code}"
+                ) from exc
+            decoded = response.json()
+        if not isinstance(decoded, dict):
+            raise LLMResponseError("ollama: /api/chat returned a non-object body")
+        return decoded
 
     def _native_root(self) -> str:
         """Strip the OpenAI-compat ``/v1`` suffix to reach Ollama's native API root."""

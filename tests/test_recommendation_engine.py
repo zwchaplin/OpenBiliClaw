@@ -1993,6 +1993,141 @@ async def test_precompute_batch_matches_expressions_by_bvid_when_response_reorde
 
 
 @pytest.mark.asyncio
+async def test_precompute_batch_falls_back_to_single_when_multi_item_response_lacks_ids(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Multi-item batch with no bvid/content_id must not be matched positionally.
+
+    Positional matching silently attaches the wrong (or an identical) reason
+    to each video on weak models. The engine should regenerate per item,
+    where each single call carries one content and cannot be misaligned.
+    """
+
+    class _NoIdBatchLLM:
+        def __init__(self) -> None:
+            self.callers: list[str] = []
+
+        async def complete_structured_task(
+            self,
+            *,
+            system_instruction: str,
+            user_input: str,
+            history: list[dict[str, str]] | None = None,
+            temperature: float = 0.7,
+            max_tokens: int = 4096,
+            caller: str = "",
+            reasoning_effort: str | None = None,
+        ) -> LLMResponse:
+            self.callers.append(caller)
+            if caller == "recommendation.write_expression":
+                # Batch reply: two entries, NO bvid/content_id at all.
+                content = json.dumps(
+                    [
+                        {"expression": "第一条文案。", "topic_label": "主题一"},
+                        {"expression": "第二条文案。", "topic_label": "主题二"},
+                    ],
+                    ensure_ascii=False,
+                )
+            else:
+                # Per-item single regeneration carries its own bvid context.
+                content = json.dumps(
+                    {"expression": f"单条重写（{len(self.callers)}）。", "topic_label": "重写主题"},
+                    ensure_ascii=False,
+                )
+            return LLMResponse(content=content, provider="test", model="dummy", usage={})
+
+    items = [
+        DiscoveredContent(bvid="BV_NOID_A", title="A 视频", relevance_score=0.9),
+        DiscoveredContent(bvid="BV_NOID_B", title="B 视频", relevance_score=0.8),
+    ]
+    llm = _NoIdBatchLLM()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        _seed_pool(db, items, precomputed=False)
+        engine = RecommendationEngine(llm=llm, database=db)
+
+        caplog.set_level(logging.WARNING)
+        completed = await engine._precompute_batch(items, _build_profile())
+
+        # One batch attempt, then one single regeneration per item.
+        assert llm.callers == [
+            "recommendation.write_expression",
+            "recommendation.expression",
+            "recommendation.expression",
+        ]
+        assert completed == 2
+        assert "positional matching is unreliable" in caplog.text
+        rows = {row["bvid"]: dict(row) for row in db.get_cached_content(limit=10)}
+        # Each row got copy via the keyed single path — never positional batch.
+        assert rows["BV_NOID_A"]["pool_expression"].startswith("单条重写")
+        assert rows["BV_NOID_B"]["pool_expression"].startswith("单条重写")
+
+
+@pytest.mark.asyncio
+async def test_precompute_batch_drops_expression_shared_across_distinct_videos(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An identical expression mapped to two different videos must be dropped.
+
+    A weak model that repeats one sentence for every item is the root of the
+    "every recommendation reason is the same" symptom. Writing it for several
+    videos is worse than writing nothing, so the duplicated copy is rejected
+    while genuinely-unique copy still lands.
+    """
+
+    class _DuplicateExpressionLLM:
+        async def complete_structured_task(
+            self,
+            *,
+            system_instruction: str,
+            user_input: str,
+            history: list[dict[str, str]] | None = None,
+            temperature: float = 0.7,
+            max_tokens: int = 4096,
+            caller: str = "",
+            reasoning_effort: str | None = None,
+        ) -> LLMResponse:
+            return LLMResponse(
+                content=json.dumps(
+                    [
+                        {"bvid": "BV_DUP_A", "expression": "一模一样的文案。", "topic_label": "t"},
+                        {"bvid": "BV_DUP_B", "expression": "一模一样的文案。", "topic_label": "t"},
+                        {"bvid": "BV_DUP_C", "expression": "C 独有的文案。", "topic_label": "tc"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                provider="test",
+                model="dummy",
+                usage={},
+            )
+
+    items = [
+        DiscoveredContent(bvid="BV_DUP_A", title="A 视频"),
+        DiscoveredContent(bvid="BV_DUP_B", title="B 视频"),
+        DiscoveredContent(bvid="BV_DUP_C", title="C 视频"),
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        _seed_pool(db, items, precomputed=False)
+        engine = RecommendationEngine(llm=_DuplicateExpressionLLM(), database=db)
+
+        caplog.set_level(logging.WARNING)
+        completed = await engine._precompute_batch(items, _build_profile())
+
+        rows = {row["bvid"]: dict(row) for row in db.get_cached_content(limit=10)}
+        # Only the unique copy survives; the shared sentence is dropped for both.
+        assert completed == 1
+        assert rows["BV_DUP_A"]["pool_expression"] == ""
+        assert rows["BV_DUP_B"]["pool_expression"] == ""
+        assert rows["BV_DUP_C"]["pool_expression"] == "C 独有的文案。"
+        assert "shared across" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_classify_batch_matches_results_by_bvid_when_response_reorders() -> None:
     class _ReorderedClassificationLLM:
         async def complete_structured_task(

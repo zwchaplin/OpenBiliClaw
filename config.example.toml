@@ -96,6 +96,13 @@ reasoning_effort = "max"
 # gemma2 / mistral / deepseek-r1。``ollama list`` 看本地已拉的模型
 model = "qwen2.5:7b"
 base_url = "http://localhost:11434/v1"
+# num_ctx: 上下文窗口大小 (tokens)。0 = 用 Ollama 服务端默认值 (通常 4096),
+# 走 OpenAI 兼容的 /v1 路径。⚠️ /v1 兼容层会"静默丢弃"num_ctx,大批量
+# prompt 一旦超过 4096 就被截断,导致本地小模型 (如 qwen) 输出无法解析的
+# JSON / 推荐文案重复且和视频对不上。设 >0 (推荐 8192) 后,聊天改走 Ollama
+# 原生 /api/chat 端点,num_ctx 才真正生效。按显存酌情调大;qwen2.5 原生
+# 支持 32K。仅 Ollama 生效,其它 provider 忽略此项。
+num_ctx = 0
 
 [llm.openrouter]
 # 若 default_provider = "openrouter"，api_key 必填

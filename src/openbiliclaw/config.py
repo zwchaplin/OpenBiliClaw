@@ -98,6 +98,13 @@ class LLMProviderConfig:
     # creeps too high and you want to trade off label quality for budget.
     # Ignored by providers that don't accept ``thinking`` / ``reasoning_effort``.
     reasoning_effort: str = "max"
+    # Ollama-only: context window (tokens). 0 = use Ollama's server default
+    # (usually 4096) via the OpenAI-compat ``/v1`` shim. When >0, chat routes
+    # through Ollama's native ``/api/chat`` so ``options.num_ctx`` actually
+    # applies — the ``/v1`` shim silently ignores it, truncating large batch
+    # prompts and breaking structured-JSON output. Ignored by all other
+    # providers. See OllamaProvider._complete_native.
+    num_ctx: int = 0
 
 
 @dataclass

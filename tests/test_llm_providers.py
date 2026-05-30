@@ -594,6 +594,171 @@ async def test_ollama_provider_embed_returns_empty_on_failure(
     assert result == []
 
 
+class _FakeChatResponse:
+    def __init__(self, body: dict[str, object]) -> None:
+        self._body = body
+        self.status_code = 200
+
+    def raise_for_status(self) -> None:
+        return
+
+    def json(self) -> dict[str, object]:
+        return self._body
+
+
+def _install_fake_chat_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    body: dict[str, object],
+    captured_url: list[str],
+    captured_payload: list[dict[str, object]],
+) -> None:
+    import httpx
+
+    class _FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _FakeClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, *, json: dict[str, object]) -> _FakeChatResponse:
+            captured_url.append(url)
+            captured_payload.append(json)
+            return _FakeChatResponse(body)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_num_ctx_routes_chat_to_native_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With num_ctx>0, complete() must POST to native /api/chat with
+    options.num_ctx so the context window actually applies (the /v1 shim
+    silently ignores it), and map prompt_eval_count/eval_count to usage."""
+    captured_url: list[str] = []
+    captured_payload: list[dict[str, object]] = []
+    _install_fake_chat_client(
+        monkeypatch,
+        body={
+            "model": "qwen2.5:7b",
+            "message": {"role": "assistant", "content": "好的"},
+            "prompt_eval_count": 1234,
+            "eval_count": 56,
+        },
+        captured_url=captured_url,
+        captured_payload=captured_payload,
+    )
+
+    provider = OllamaProvider(
+        model="qwen2.5:7b", base_url="http://localhost:11434/v1", num_ctx=8192
+    )
+    response = await provider.complete(
+        [{"role": "user", "content": "hi"}], max_tokens=512, temperature=0.3
+    )
+
+    assert captured_url == ["http://localhost:11434/api/chat"]
+    payload = captured_payload[0]
+    assert payload["model"] == "qwen2.5:7b"
+    assert payload["stream"] is False
+    assert payload["options"] == {"temperature": 0.3, "num_ctx": 8192, "num_predict": 512}
+    assert "format" not in payload  # json_mode defaults to False
+    assert response.content == "好的"
+    assert response.provider == "ollama"
+    assert response.usage == {
+        "prompt_tokens": 1234,
+        "completion_tokens": 56,
+        "total_tokens": 1290,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_native_json_mode_sets_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """json_mode on the native path maps to Ollama's format='json'."""
+    captured_payload: list[dict[str, object]] = []
+    _install_fake_chat_client(
+        monkeypatch,
+        body={"message": {"content": "[]"}, "prompt_eval_count": 1, "eval_count": 1},
+        captured_url=[],
+        captured_payload=captured_payload,
+    )
+
+    provider = OllamaProvider(base_url="http://localhost:11434/v1", num_ctx=4096)
+    await provider.complete([{"role": "user", "content": "hi"}], json_mode=True)
+
+    assert captured_payload[0]["format"] == "json"
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_default_num_ctx_uses_openai_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """num_ctx=0 (default) keeps the OpenAI-compat /v1 path untouched —
+    the native /api/chat client must never be constructed."""
+    import httpx
+
+    class _ExplodingClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("native /api/chat client built when num_ctx=0")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _ExplodingClient)
+
+    provider = OllamaProvider(model="llama3", base_url="http://localhost:11434/v1")
+
+    async def fake_request(**kwargs: object) -> SimpleNamespace:
+        return _openai_response("shim-ok")
+
+    monkeypatch.setattr(provider, "_request_with_retry", fake_request)
+
+    response = await provider.complete([{"role": "user", "content": "hi"}])
+    assert response.content == "shim-ok"
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_native_retries_without_format_on_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty content under format=json triggers one unconstrained retry —
+    parity with the OpenAI-shim empty-content recovery."""
+    captured_payload: list[dict[str, object]] = []
+
+    class _TwoShotClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> _TwoShotClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(self, url: str, *, json: dict[str, object]) -> _FakeChatResponse:
+            captured_payload.append(dict(json))
+            if len(captured_payload) == 1:
+                return _FakeChatResponse({"message": {"content": "   "}})
+            return _FakeChatResponse(
+                {"message": {"content": "recovered"}, "prompt_eval_count": 5, "eval_count": 2}
+            )
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _TwoShotClient)
+
+    provider = OllamaProvider(base_url="http://localhost:11434/v1", num_ctx=4096)
+    response = await provider.complete([{"role": "user", "content": "hi"}], json_mode=True)
+
+    assert len(captured_payload) == 2
+    assert captured_payload[0]["format"] == "json"  # first attempt constrained
+    assert "format" not in captured_payload[1]  # retry unconstrained
+    assert response.content == "recovered"
+
+
 def test_openrouter_provider_defaults_and_headers() -> None:
     provider = OpenRouterProvider(
         api_key="test-key",

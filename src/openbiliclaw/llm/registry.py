@@ -486,6 +486,7 @@ def _maybe_ollama_provider(config: Config, overrides: dict[str, LLMProvider]) ->
         model=model or "llama3",
         base_url=base_url,
         timeout=float(config.llm.timeout),
+        num_ctx=int(config.llm.ollama.num_ctx),
     )
 
 

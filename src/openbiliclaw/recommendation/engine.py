@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -1364,16 +1364,33 @@ class RecommendationEngine:
             return await self._precompute_single_fallback(batch, profile)
 
         payload_by_id = _batch_results_by_content_key(payload, batch)
-        if payload_by_id is None and len(payload) != len(batch):
+        if payload_by_id is None and len(batch) > 1:
+            # The prompt requires every entry to echo back its bvid /
+            # content_id (rule 2) and preserve input order (rule 1). When a
+            # *multi-item* response carries no identifiers we cannot verify
+            # alignment: a reordered or repeated array silently attaches each
+            # video the wrong (or an identical) reason. Weak local models
+            # (e.g. qwen:7b under a truncated context window) hit this
+            # constantly, surfacing to users as "every recommendation reason
+            # is the same and doesn't match the video". Regenerate per item
+            # instead — each single call carries exactly one content item and
+            # cannot be misaligned. (A 1-item batch has no ordering ambiguity,
+            # so positional matching below stays safe for it.)
             logger.warning(
-                "Batch expression result count mismatch without IDs (%d results for %d items), "
-                "falling back to single generation",
-                len(payload),
+                "Batch expression response carried no bvid/content_id for %d "
+                "items; positional matching is unreliable, falling back to "
+                "single generation",
                 len(batch),
             )
             return await self._precompute_single_fallback(batch, profile)
 
-        completed = 0
+        # Gather candidates first (keyed match, or positional for a lone item
+        # where order is unambiguous) so we can reject a degenerate batch that
+        # repeats the same expression across distinct videos (violates rule 6;
+        # surfaces as identical 推荐语). Serving duplicate copy for different
+        # videos is worse than serving none — the pool gate simply skips the
+        # un-copied items until a healthier regeneration fills them.
+        gathered: list[tuple[DiscoveredContent, str, str]] = []
         for i, item in enumerate(batch):
             if payload_by_id is None:
                 result = payload[i] if i < len(payload) else None
@@ -1391,6 +1408,25 @@ class RecommendationEngine:
             expression = str(result.get("expression", "")).strip()
             topic_label = str(result.get("topic_label", "")).strip()
             if not expression or not topic_label:
+                continue
+            gathered.append((item, expression, topic_label))
+
+        bvids_by_expression: dict[str, set[str]] = defaultdict(set)
+        for item, expression, _ in gathered:
+            bvids_by_expression[expression].add(item.bvid)
+        duplicated = {
+            expression for expression, bvids in bvids_by_expression.items() if len(bvids) > 1
+        }
+        if duplicated:
+            logger.warning(
+                "Batch expression produced %d expression(s) shared across "
+                "distinct videos (model likely repeating itself); dropping them",
+                len(duplicated),
+            )
+
+        completed = 0
+        for item, expression, topic_label in gathered:
+            if expression in duplicated:
                 continue
             self._database.update_pool_copy(
                 item.bvid,
