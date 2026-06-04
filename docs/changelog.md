@@ -11,6 +11,7 @@
 - 小红书 / 抖音 / YouTube 的 `daily_*_budget` 默认改为 `0`，语义统一为“不设每日上限”；持续补池改为像 B 站一样主要受平台缺口、单轮 `scheduler.discovery_limit` 和 producer 节流控制，避免外站内容被刷完后因当天预算耗尽而长期不补。
 - 队列层统一支持 `daily_budget <= 0` 跳过每日上限：`XhsTaskQueue`、`DyTaskQueue` 和 YouTube bootstrap `YtTaskQueue` 都保留正数预算限流能力，但默认不再按天卡死。抖音 hot runtime 预算在配置为 `0` 时不再被缺口动态放大成正数。
 - YouTube steady-state producer 在 `daily_*_budget = 0` 时以本轮 `limit` 作为策略执行预算；显式正数仍按 SQLite ledger 做每日剩余额度，便于需要严格限流的用户手动恢复上限。插件设置页、API 配置模型、CLI fallback、`config.example.toml` 和配置参考同步更新。
+- 项目主页（GitHub Pages `docs/index.html`）新增 GitHub Star 强引导：顶栏常驻 Star 胶囊按钮 + 结尾专属 Star CTA 卡片，两处均显示实时星标数（GitHub API + sessionStorage 缓存，拉取失败时优雅隐藏、不留占位符，按钮始终可用）；复用页面现有 i18n 实现中英双语 + 响应式，沿用 `--pink` / `--yellow` 品牌色与胶囊按钮风格。纯增量改动，不涉及接口 / 数据流 / 架构。
 
 ## extension v0.3.66: 推荐「聊一聊」输入框失焦自动收起（三端）（2026-06-03）
 
