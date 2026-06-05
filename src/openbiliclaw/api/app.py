@@ -5204,11 +5204,13 @@ def create_app(
     async def autostart_apply(
         payload: AutostartApplyIn, request: Request
     ) -> AutostartStatusOut | JSONResponse:
-        from openbiliclaw.config import load_config
+        from openbiliclaw.config import _default_config_path as _cfg_path
+        from openbiliclaw.config import load_config as _load
+        from openbiliclaw.config import save_config as _save
         from openbiliclaw.runtime import autostart
         from openbiliclaw.runtime.autostart.guards import active_env_managed_inputs
 
-        cfg = load_config()
+        cfg = _load()
         if not _get_auth_gate().is_trusted_local(request):
             body = _autostart_status_out(
                 request,
@@ -5238,7 +5240,114 @@ def create_app(
             )
             return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
 
-        return _autostart_status_out(request, cfg)
+        async with _CONFIG_SAVE_LOCK:
+            config_path = _cfg_path()
+            config_existed = config_path.exists()
+            backup_path = _snapshot_config_file(config_path)
+
+            def _rollback_cfg() -> None:
+                if backup_path is not None:
+                    with suppress(Exception):
+                        _restore_config_snapshot(backup_path, config_path)
+                elif not config_existed:
+                    with suppress(Exception):
+                        config_path.unlink(missing_ok=True)
+
+            cfg = _load()
+            was_registered = autostart.status().registered
+
+            if payload.enabled:
+                cfg.autostart.enabled = True
+                try:
+                    _save(cfg, autostart_authoritative=True)
+                except Exception:
+                    _rollback_cfg()
+                    logger.warning("autostart: enable save_config failed", exc_info=True)
+                    body = _autostart_status_out(
+                        request,
+                        _load(),
+                        reason_override="unavailable",
+                        detail_override="保存配置失败，开机自启动未修改。",
+                    )
+                    return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
+
+                effective = _load()
+                if effective.autostart.enabled is not True:
+                    _rollback_cfg()
+                    body = _autostart_status_out(
+                        request,
+                        _load(),
+                        reason_override="shadowed",
+                        detail_override=(
+                            "config.local.toml 覆盖了 [autostart].enabled，"
+                            "config.toml 修改不会生效。"
+                        ),
+                    )
+                    return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+                try:
+                    autostart.register(effective)
+                except Exception:
+                    _rollback_cfg()
+                    logger.warning("autostart: OS registration failed", exc_info=True)
+                    body = _autostart_status_out(
+                        request,
+                        _load(),
+                        reason_override="registration_failed",
+                        detail_override="系统自启动项注册失败，配置已回滚。",
+                    )
+                    return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+                return _autostart_status_out(request, _load())
+
+            try:
+                autostart.unregister()
+            except Exception:
+                logger.warning("autostart: OS unregister failed", exc_info=True)
+                body = _autostart_status_out(
+                    request,
+                    cfg,
+                    reason_override="unregister_failed",
+                    detail_override="系统自启动项移除失败，配置未修改。",
+                )
+                return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+            cfg.autostart.enabled = False
+            try:
+                _save(cfg, autostart_authoritative=True)
+            except Exception:
+                if was_registered:
+                    with suppress(Exception):
+                        cfg.autostart.enabled = True
+                        autostart.register(cfg)
+                _rollback_cfg()
+                logger.warning("autostart: disable save_config failed", exc_info=True)
+                body = _autostart_status_out(
+                    request,
+                    _load(),
+                    reason_override="unavailable",
+                    detail_override="保存配置失败，系统自启动项已尝试恢复。",
+                )
+                return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
+
+            effective = _load()
+            if effective.autostart.enabled is not False:
+                if was_registered:
+                    with suppress(Exception):
+                        cfg.autostart.enabled = True
+                        autostart.register(cfg)
+                _rollback_cfg()
+                body = _autostart_status_out(
+                    request,
+                    _load(),
+                    reason_override="shadowed",
+                    detail_override=(
+                        "config.local.toml 覆盖了 [autostart].enabled，"
+                        "config.toml 修改不会生效。"
+                    ),
+                )
+                return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+            return _autostart_status_out(request, _load())
 
     # ── Configuration management endpoints ──────────────────────────
 

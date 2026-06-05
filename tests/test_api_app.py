@@ -2642,6 +2642,236 @@ class TestBackendAPI:
         assert response.json()["reason"] == "env_managed"
         assert "GOOGLE_API_KEY" in response.json()["detail"]
 
+    def test_autostart_apply_enable_writes_config_then_registers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import load_config
+        from openbiliclaw.runtime import autostart
+        from openbiliclaw.runtime.autostart import guards
+        from openbiliclaw.runtime.autostart.base import AutostartStatus
+
+        registered = False
+        calls: list[str] = []
+
+        def fake_register(loaded_cfg: object) -> None:
+            nonlocal registered
+            calls.append("register")
+            registered = True
+
+        monkeypatch.setattr(
+            autostart,
+            "status",
+            lambda: AutostartStatus(True, registered, "darwin", "launchd"),
+        )
+        monkeypatch.setattr(autostart, "register", fake_register)
+        monkeypatch.setattr(guards, "active_env_managed_inputs", lambda loaded_cfg: [])
+        app = create_app()
+        app.state.auth_gate.is_trusted_local = lambda request: True
+        client = TestClient(app)
+
+        response = client.post("/api/autostart/apply", json={"enabled": True})
+
+        assert response.status_code == 200
+        assert calls == ["register"]
+        assert response.json()["enabled"] is True
+        assert response.json()["registered"] is True
+        assert load_config(tmp_path / "runtime" / "config.toml").autostart.enabled is True
+
+    def test_autostart_apply_disable_unregisters_before_writing_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import Config, load_config, save_config
+        from openbiliclaw.runtime import autostart
+        from openbiliclaw.runtime.autostart import guards
+        from openbiliclaw.runtime.autostart.base import AutostartStatus
+
+        cfg = Config()
+        cfg.autostart.enabled = True
+        save_config(cfg, tmp_path / "runtime" / "config.toml", autostart_authoritative=True)
+        registered = True
+        calls: list[str] = []
+
+        def fake_unregister() -> None:
+            nonlocal registered
+            calls.append(f"unregister_before_config={load_config().autostart.enabled}")
+            registered = False
+
+        monkeypatch.setattr(
+            autostart,
+            "status",
+            lambda: AutostartStatus(True, registered, "darwin", "launchd"),
+        )
+        monkeypatch.setattr(autostart, "unregister", fake_unregister)
+        monkeypatch.setattr(guards, "active_env_managed_inputs", lambda loaded_cfg: [])
+        app = create_app()
+        app.state.auth_gate.is_trusted_local = lambda request: True
+        client = TestClient(app)
+
+        response = client.post("/api/autostart/apply", json={"enabled": False})
+
+        assert response.status_code == 200
+        assert calls == ["unregister_before_config=True"]
+        assert response.json()["enabled"] is False
+        assert response.json()["registered"] is False
+        assert load_config(tmp_path / "runtime" / "config.toml").autostart.enabled is False
+
+    def test_autostart_apply_register_failure_rolls_back_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import load_config
+        from openbiliclaw.runtime import autostart
+        from openbiliclaw.runtime.autostart import guards
+        from openbiliclaw.runtime.autostart.base import AutostartStatus
+
+        monkeypatch.setattr(
+            autostart,
+            "status",
+            lambda: AutostartStatus(True, False, "darwin", "launchd"),
+        )
+        monkeypatch.setattr(
+            autostart,
+            "register",
+            lambda loaded_cfg: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        monkeypatch.setattr(guards, "active_env_managed_inputs", lambda loaded_cfg: [])
+        app = create_app()
+        app.state.auth_gate.is_trusted_local = lambda request: True
+        client = TestClient(app)
+
+        response = client.post("/api/autostart/apply", json={"enabled": True})
+
+        assert response.status_code == 409
+        assert response.json()["reason"] == "registration_failed"
+        assert load_config(tmp_path / "runtime" / "config.toml").autostart.enabled is False
+
+    def test_autostart_apply_unregister_failure_keeps_config_enabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import Config, load_config, save_config
+        from openbiliclaw.runtime import autostart
+        from openbiliclaw.runtime.autostart import guards
+        from openbiliclaw.runtime.autostart.base import AutostartStatus
+
+        cfg = Config()
+        cfg.autostart.enabled = True
+        save_config(cfg, tmp_path / "runtime" / "config.toml", autostart_authoritative=True)
+        monkeypatch.setattr(
+            autostart,
+            "status",
+            lambda: AutostartStatus(True, True, "darwin", "launchd"),
+        )
+        monkeypatch.setattr(
+            autostart,
+            "unregister",
+            lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        monkeypatch.setattr(guards, "active_env_managed_inputs", lambda loaded_cfg: [])
+        app = create_app()
+        app.state.auth_gate.is_trusted_local = lambda request: True
+        client = TestClient(app)
+
+        response = client.post("/api/autostart/apply", json={"enabled": False})
+
+        assert response.status_code == 409
+        assert response.json()["reason"] == "unregister_failed"
+        assert load_config(tmp_path / "runtime" / "config.toml").autostart.enabled is True
+
+    def test_autostart_apply_shadowed_enable_does_not_register(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.config import load_config
+        from openbiliclaw.runtime import autostart
+        from openbiliclaw.runtime.autostart import guards
+        from openbiliclaw.runtime.autostart.base import AutostartStatus
+
+        (tmp_path / "runtime" / "config.local.toml").write_text(
+            "[autostart]\nenabled = false\n",
+            encoding="utf-8",
+        )
+        register_calls: list[object] = []
+        monkeypatch.setattr(
+            autostart,
+            "status",
+            lambda: AutostartStatus(True, False, "darwin", "launchd"),
+        )
+        monkeypatch.setattr(
+            autostart,
+            "register",
+            lambda loaded_cfg: register_calls.append(loaded_cfg),
+        )
+        monkeypatch.setattr(guards, "active_env_managed_inputs", lambda loaded_cfg: [])
+        app = create_app()
+        app.state.auth_gate.is_trusted_local = lambda request: True
+        client = TestClient(app)
+
+        response = client.post("/api/autostart/apply", json={"enabled": True})
+
+        assert response.status_code == 409
+        assert response.json()["reason"] == "shadowed"
+        assert register_calls == []
+        assert load_config(tmp_path / "runtime" / "config.toml").autostart.enabled is False
+
+    def test_autostart_apply_disable_save_failure_reregisters_and_rolls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw import config as config_module
+        from openbiliclaw.config import Config, load_config, save_config
+        from openbiliclaw.runtime import autostart
+        from openbiliclaw.runtime.autostart import guards
+        from openbiliclaw.runtime.autostart.base import AutostartStatus
+
+        cfg = Config()
+        cfg.autostart.enabled = True
+        save_config(cfg, tmp_path / "runtime" / "config.toml", autostart_authoritative=True)
+        registered = True
+        calls: list[str] = []
+
+        def fake_unregister() -> None:
+            nonlocal registered
+            calls.append("unregister")
+            registered = False
+
+        def fake_register(loaded_cfg: object) -> None:
+            nonlocal registered
+            calls.append("register")
+            registered = True
+
+        def fake_save(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(
+            autostart,
+            "status",
+            lambda: AutostartStatus(True, registered, "darwin", "launchd"),
+        )
+        monkeypatch.setattr(autostart, "unregister", fake_unregister)
+        monkeypatch.setattr(autostart, "register", fake_register)
+        monkeypatch.setattr(guards, "active_env_managed_inputs", lambda loaded_cfg: [])
+        monkeypatch.setattr(config_module, "save_config", fake_save)
+        app = create_app()
+        app.state.auth_gate.is_trusted_local = lambda request: True
+        client = TestClient(app)
+
+        response = client.post("/api/autostart/apply", json={"enabled": False})
+
+        assert response.status_code == 503
+        assert response.json()["reason"] == "unavailable"
+        assert calls == ["unregister", "register"]
+        assert registered is True
+        assert load_config(tmp_path / "runtime" / "config.toml").autostart.enabled is True
+
     def test_profile_summary_endpoint_returns_initialized_profile(self) -> None:
         from fastapi.testclient import TestClient
 
