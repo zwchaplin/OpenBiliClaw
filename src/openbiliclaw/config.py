@@ -232,6 +232,14 @@ class SchedulerConfig:
 
 
 @dataclass
+class AutostartConfig:
+    """Boot autostart configuration."""
+
+    enabled: bool = False
+    manage_ollama: bool = True
+
+
+@dataclass
 class XiaohongshuSourceConfig:
     """Xiaohongshu source-specific configuration.
 
@@ -431,6 +439,7 @@ class Config:
     bilibili: BilibiliConfig = field(default_factory=BilibiliConfig)
     sources: SourcesConfig = field(default_factory=SourcesConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    autostart: AutostartConfig = field(default_factory=AutostartConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     # Top-level `[soul]` is distinct from `[llm.soul]` (per-module
@@ -545,6 +554,9 @@ def _build_config(raw: dict[str, Any]) -> Config:
     bili_raw = raw.get("bilibili", {})
     sources_raw = raw.get("sources", {})
     sched_raw = dict(raw.get("scheduler", {}))
+    autostart_raw = raw.get("autostart", {})
+    if not isinstance(autostart_raw, dict):
+        autostart_raw = {}
     store_raw = raw.get("storage", {})
     logging_raw = raw.get("logging", {})
 
@@ -739,6 +751,10 @@ def _build_config(raw: dict[str, Any]) -> Config:
                     sched_raw.get("auto_update_allowed_remotes")
                 ),
             }
+        ),
+        autostart=AutostartConfig(
+            enabled=_coerce_bool(autostart_raw.get("enabled"), default=False),
+            manage_ollama=_coerce_bool(autostart_raw.get("manage_ollama"), default=True),
         ),
         storage=StorageConfig(**store_raw),
         logging=LoggingConfig(**logging_raw),

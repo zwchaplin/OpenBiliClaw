@@ -7,6 +7,7 @@ import pytest
 from openbiliclaw import config as config_module
 from openbiliclaw.config import (
     ApiConfig,
+    AutostartConfig,
     BilibiliConfig,
     Config,
     ConfigError,
@@ -87,6 +88,9 @@ class TestConfigDefaults:
         assert config.scheduler.enabled is True
         assert config.scheduler.discovery_cron == "0 */8 * * *"
         assert config.scheduler.pool_target_count == 300
+        assert isinstance(config.autostart, AutostartConfig)
+        assert config.autostart.enabled is False
+        assert config.autostart.manage_ollama is True
 
     def test_config_defaults_pool_target_count_to_300(self) -> None:
         config = Config()
@@ -129,6 +133,27 @@ class TestConfigDefaults:
         config = _build_config({})
         assert config.language == "zh"
         assert config.llm.default_provider == "openai"
+        assert config.autostart.enabled is False
+        assert config.autostart.manage_ollama is True
+
+    def test_load_config_coerces_autostart_env_bool_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            """
+[autostart]
+enabled = true
+manage_ollama = true
+""".strip(),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("OPENBILICLAW_AUTOSTART_ENABLED", "false")
+
+        config = load_config(config_path)
+
+        assert config.autostart.enabled is False
+        assert config.autostart.manage_ollama is True
 
     def test_build_from_partial_dict(self) -> None:
         raw = {
