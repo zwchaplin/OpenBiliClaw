@@ -22,6 +22,9 @@ from rich.table import Table
 from openbiliclaw.runtime.ollama_supervisor import (
     _ollama_is_running,
     _ollama_start_serve_background,
+    effective_ollama_endpoint,
+    is_loopback,
+    ollama_required,
 )
 
 
@@ -227,6 +230,58 @@ def _warn_if_pause_on_disconnect_requires_presence() -> None:
             f"[yellow]{_EXTENSION_PRESENCE_REQUIRED_WARNING}[/yellow]",
             soft_wrap=True,
         )
+
+
+def _is_default_ollama_endpoint(endpoint: str) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(endpoint)
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"} and parsed.port == 11434
+
+
+def _preflight_loopback_ollama(cfg: Any) -> None:
+    if not ollama_required(cfg) or not cfg.autostart.manage_ollama:
+        return
+    endpoint = effective_ollama_endpoint(cfg)
+    if not is_loopback(endpoint):
+        return
+    if _ollama_is_running(host=endpoint):
+        return
+    if not _is_default_ollama_endpoint(endpoint):
+        console.print(
+            f"[yellow]本机 Ollama 端点 {endpoint} 未响应；自定义端口不会自动执行 "
+            "`ollama serve`，请自行管理该服务。[/yellow]"
+        )
+        return
+    if not _ollama_start_serve_background():
+        console.print(
+            "[yellow]Ollama preflight 未能拉起本机服务；后端继续启动，"
+            "后续 LLM/embedding 请求可能降级或失败。[/yellow]"
+        )
+
+
+def _self_heal_autostart_registration(cfg: Any) -> None:
+    if not cfg.autostart.enabled:
+        return
+
+    from openbiliclaw.runtime import autostart
+    from openbiliclaw.runtime.autostart.guards import active_env_managed_inputs
+
+    state = autostart.status()
+    if not state.supported or state.registered:
+        return
+    managed = active_env_managed_inputs(cfg)
+    if managed:
+        console.print(
+            "[yellow]已开启开机自启动，但检测到环境变量配置，跳过自动补注册："
+            f"{', '.join(managed)}。请先写入 config.toml。[/yellow]"
+        )
+        return
+    try:
+        autostart.register(cfg)
+    except Exception as exc:
+        console.print(f"[yellow]开机自启动补注册失败：{exc}[/yellow]")
 
 
 def _print_section_title(title: str) -> None:
@@ -3134,6 +3189,8 @@ def start(
                 "否则远程请求可能被误判为本机而绕过密码。",
             )
     _maybe_create_runtime_database_backup()
+    _preflight_loopback_ollama(cfg)
+    _self_heal_autostart_registration(cfg)
     _run_api_server(host=effective_host, port=effective_port)
 
 
