@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -181,7 +182,7 @@ _EXTENSION_PRESENCE_REQUIRED_WARNING = (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Coroutine, Mapping
 
 
 def _print_page_title(title: str, subtitle: str = "") -> None:
@@ -4143,6 +4144,444 @@ def _ask_init_bilibili_limits(
     return favorite, follow
 
 
+@dataclass
+class InitResult:
+    """Outcome of :func:`run_guided_init`, consumed by the CLI summary
+    and (gui-init) the API init endpoint."""
+
+    history: list[dict[str, Any]]
+    favorites_data: list[dict[str, Any]]
+    following_data: list[dict[str, Any]]
+    events: list[dict[str, Any]]
+    bilibili_event_count: int
+    xhs_events: list[dict[str, Any]]
+    xhs_scope_counts: dict[str, Any]
+    xhs_status: str
+    dy_events: list[dict[str, Any]]
+    dy_scope_counts: dict[str, Any]
+    dy_status: str
+    yt_events: list[dict[str, Any]]
+    yt_scope_counts: dict[str, Any]
+    yt_status: str
+    profile_data: Any
+    discovered_count: int
+    discovery_error: bool
+    discover_exc: BaseException | None
+
+
+class GuidedInitError(Exception):
+    """Hard failure raised inside :func:`run_guided_init`.
+
+    ``reason`` is a stable machine code (``empty_history`` /
+    ``profile_failed``) the API maps onto ``InitCoordinator.fail`` and
+    the CLI maps onto a status panel + non-zero exit.
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        self.message = message
+        super().__init__(message)
+
+
+async def _fetch_bilibili_init_data(
+    client: Any,
+    *,
+    favorite_limit: int,
+    follow_limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch B站 history / favorites / following in one event loop.
+
+    Extracted from the old ``init`` closure so the CLI and the API
+    guided-init paths share a single B站 fetch (gui-init spec §1). Uses
+    ``_INIT_BILIBILI_HISTORY_LIMIT`` for history; favorites/following
+    limits are resolved by the caller.
+    """
+    hist = await client.get_user_history(max_items=_INIT_BILIBILI_HISTORY_LIMIT)
+
+    favs: list[dict[str, Any]] = []
+    try:
+        fav_folders = (
+            await client.get_all_favorites(
+                max_folders=200,
+                max_items_per_folder=max(1, favorite_limit),
+            )
+            if favorite_limit > 0
+            else []
+        )
+        for folder in fav_folders:
+            folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
+            for item in folder.items if hasattr(folder, "items") else []:
+                if len(favs) >= favorite_limit:
+                    break
+                upper = item.get("upper", {}) if isinstance(item, dict) else {}
+                if not isinstance(upper, dict):
+                    upper = {}
+                favs.append(
+                    {
+                        "title": item.get("title", "") if isinstance(item, dict) else str(item),
+                        "upper": str(upper.get("name", "")).strip(),
+                        "folder": folder_title,
+                    }
+                )
+            if len(favs) >= favorite_limit:
+                break
+    except Exception as exc:
+        console.print(f"  [yellow]收藏夹拉取失败: {exc}[/yellow]")
+
+    follows: list[dict[str, Any]] = []
+    try:
+        page = 1
+        page_size = 50
+        while len(follows) < follow_limit:
+            page_users = await client.get_following(page=page, page_size=page_size)
+            if not page_users:
+                break
+            for user in page_users:
+                if len(follows) >= follow_limit:
+                    break
+                follows.append(
+                    {
+                        "name": getattr(user, "uname", str(user)),
+                        "sign": getattr(user, "sign", ""),
+                    }
+                )
+            if len(page_users) < page_size:
+                break
+            page += 1
+    except Exception as exc:
+        console.print(f"  [yellow]关注列表拉取失败: {exc}[/yellow]")
+
+    return hist, favs, follows
+
+
+async def run_guided_init(
+    *,
+    client: Any,
+    memory: Any,
+    soul_engine: Any,
+    favorite_limit: int,
+    follow_limit: int,
+    include_xhs: bool,
+    include_dy: bool,
+    include_yt: bool,
+    target_pool_count: int,
+    discover_backfill: Callable[..., Coroutine[Any, Any, int]],
+    coordinator: Any = None,
+    run_id: str | None = None,
+) -> InitResult:
+    """Shared async init pipeline (gui-init spec §1).
+
+    Runs the four init stages in one event loop so neither the CLI
+    (``asyncio.run(run_guided_init(...))``) nor the API (``await
+    run_guided_init(...)`` on the server loop) nests event loops:
+
+      1. fetch B站 + collect cross-platform bootstrap signals → propagate
+      2. analyze preferences
+      3/4. build soul profile ‖ backfill discovery pool (parallel)
+
+    ``discover_backfill`` is the one genuinely path-specific step: the CLI
+    injects :func:`_run_init_discovery_backfill_async` (one-shot engine);
+    the API injects ``controller.run_init_backfill`` (holds the refresh
+    lock). When ``coordinator``/``run_id`` are supplied, stage transitions
+    and enqueued bootstrap task ids are reported for live GUI progress;
+    run lifecycle (mark_running / complete / fail) stays with the caller.
+    """
+
+    async def _stage_started(n: int) -> None:
+        if coordinator is not None and run_id is not None:
+            await coordinator.stage_started(run_id, n)
+
+    async def _stage_done(n: int) -> None:
+        if coordinator is not None and run_id is not None:
+            await coordinator.stage_done(run_id, n)
+
+    def _register_task(task_id: str | None) -> None:
+        if coordinator is not None and run_id is not None and task_id:
+            coordinator.register_enqueued_task(run_id, task_id)
+
+    # Enqueue the XHS bootstrap task FIRST so the browser extension can
+    # run it in parallel with the slow B站 history/favs/follows fetches
+    # below (~10–30s). XHS is HTTP-only on B站's side so there's no
+    # browser-tab focus conflict; Douyin/YouTube are enqueued LATER,
+    # serialised, to avoid two active-tab focus grabs racing.
+    xhs_task_id = _enqueue_xhs_bootstrap_task() if include_xhs else None
+    _register_task(xhs_task_id)
+    if xhs_task_id:
+        console.print("  [dim]已请求扩展拉小红书收藏 / 点赞（后台并行,不阻塞 B 站拉取）。[/dim]")
+
+    # ── Stage 1: fetch + cross-platform bootstrap collect → propagate ──
+    await _stage_started(1)
+    _print_section_title("1/4 拉取数据")
+    history, favorites_data, following_data = await _fetch_bilibili_init_data(
+        client, favorite_limit=favorite_limit, follow_limit=follow_limit
+    )
+    if not history:
+        raise GuidedInitError("empty_history", "当前无法从 B 站历史中生成初始画像。")
+    console.print(
+        f"  浏览历史 [green]{len(history)}[/green] 条"
+        f" / 收藏 [green]{len(favorites_data)}[/green] 个"
+        f" / 关注 [green]{len(following_data)}[/green] 人"
+    )
+
+    # Bootstrap collectors poll a DB task queue with a blocking sleep —
+    # run them in a worker thread (Database is check_same_thread=False) so
+    # the API event loop isn't frozen for the collect window. CLI output /
+    # ordering is unchanged (it's sequential here regardless).
+    xhs_events, xhs_scope_counts, xhs_status = await asyncio.to_thread(
+        _collect_xhs_bootstrap_events, xhs_task_id
+    )
+    if xhs_status == "ok":
+        console.print(
+            "  小红书 "
+            f"收藏 [green]{xhs_scope_counts.get('saved', 0)}[/green] 个"
+            f" / 点赞 [green]{xhs_scope_counts.get('liked', 0)}[/green] 个"
+            f" / 浏览记录 [green]{xhs_scope_counts.get('xhs_history', 0)}[/green] 个"
+        )
+    elif xhs_status == "empty":
+        console.print(
+            "  [yellow]小红书任务跑通但 0 条 notes —— "
+            "可能未登录小红书 / 个人主页没有公开收藏 / 页面 state 漂移。[/yellow]"
+        )
+    elif xhs_status == "timeout":
+        console.print(
+            "  [dim]小红书初始化信号未导入：扩展未连接或任务仍在后台跑。"
+            "可设 OPENBILICLAW_XHS_BOOTSTRAP_WAIT_SECONDS=180 延长等待。[/dim]"
+        )
+    elif xhs_status == "failed":
+        console.print("  [yellow]小红书任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
+
+    # Now (XHS done) enqueue Douyin. Serialised so the two browser-
+    # focus-grabbing dispatchers don't race for the same active tab.
+    dy_task_id = _enqueue_dy_bootstrap_task() if include_dy else None
+    _register_task(dy_task_id)
+    if dy_task_id:
+        console.print(
+            "  [dim]已请求扩展拉抖音发布 / 收藏 / 点赞 / 关注"
+            "(开始抢一次浏览器焦点,~60-90 秒)。[/dim]"
+        )
+    dy_events, dy_scope_counts, dy_status = await asyncio.to_thread(
+        _collect_dy_bootstrap_events, dy_task_id
+    )
+    if dy_status == "ok":
+        console.print(
+            "  抖音 "
+            f"发布 [green]{dy_scope_counts.get('dy_post', 0)}[/green] 条"
+            f" / 收藏 [green]{dy_scope_counts.get('dy_collect', 0)}[/green] 个"
+            f" / 点赞 [green]{dy_scope_counts.get('dy_like', 0)}[/green] 个"
+            f" / 关注 [green]{dy_scope_counts.get('dy_follow', 0)}[/green] 人"
+        )
+    elif dy_status == "empty":
+        console.print(
+            "  [yellow]抖音任务跑通但 0 条 videos —— "
+            "未登录抖音(常见,抖音对未登录返回 200+空 body),或个人主页隐私设置阻拦。[/yellow]"
+        )
+    elif dy_status == "timeout":
+        console.print(
+            "  [dim]抖音初始化信号未导入:扩展未连接或任务仍在后台跑。"
+            "可设 OPENBILICLAW_DY_BOOTSTRAP_WAIT_SECONDS=180 延长等待。[/dim]"
+        )
+    elif dy_status == "failed":
+        console.print("  [yellow]抖音任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
+
+    # YouTube is enqueued AFTER Douyin completes — same serialisation
+    # rationale as XHS→Douyin: each dispatcher opens a foreground tab and
+    # grabs focus; running two at once causes tab-focus races.
+    yt_task_id = _enqueue_yt_bootstrap_task() if include_yt else None
+    _register_task(yt_task_id)
+    if yt_task_id:
+        console.print(
+            "  [dim]已请求扩展拉 YouTube 观看历史 / 订阅 / 点赞"
+            "(开始抢一次浏览器焦点,~30-90 秒)。[/dim]"
+        )
+    yt_events, yt_scope_counts, yt_status = await asyncio.to_thread(
+        _collect_yt_bootstrap_events, yt_task_id
+    )
+    if yt_status == "ok":
+        console.print(
+            "  YouTube "
+            f"观看历史 [green]{yt_scope_counts.get('yt_history', 0)}[/green] 条"
+            f" / 订阅 [green]{yt_scope_counts.get('yt_subscriptions', 0)}[/green] 个"
+            f" / 点赞 [green]{yt_scope_counts.get('yt_likes', 0)}[/green] 个"
+        )
+    elif yt_status == "empty":
+        console.print(
+            "  [yellow]YouTube 任务跑通但 0 条记录 —— 未登录 YouTube 或页面内容为空。[/yellow]"
+        )
+    elif yt_status == "timeout":
+        console.print(
+            "  [dim]YouTube 初始化信号未导入:扩展未连接或任务仍在后台跑。"
+            "可设 OPENBILICLAW_YT_BOOTSTRAP_WAIT_SECONDS=300 延长等待。[/dim]"
+        )
+    elif yt_status == "failed":
+        console.print("  [yellow]YouTube 任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
+
+    # Build events from all data sources via the unified event_format
+    # builder so B站 / 小红书 / future-source events share one shape.
+    from openbiliclaw.sources.event_format import SOURCE_BILIBILI, build_event
+
+    events = [_history_item_to_event(item) for item in history]
+    for fav in favorites_data:
+        folder = str(fav.get("folder", "")).strip()
+        upper = str(fav.get("upper", "")).strip()
+        events.append(
+            build_event(
+                event_type="favorite",
+                source_platform=SOURCE_BILIBILI,
+                title=str(fav.get("title", "")),
+                author=upper,
+                metadata={
+                    "folder": folder,
+                    "upper": upper,
+                },
+            )
+        )
+    for user in following_data:
+        sign = str(user.get("sign", "")).strip()
+        name = str(user.get("name", ""))
+        events.append(
+            build_event(
+                event_type="follow",
+                source_platform=SOURCE_BILIBILI,
+                title=name,
+                author=name,
+                context=(
+                    f"在 B 站关注了《{name}》,签名:{sign}" if sign else f"在 B 站关注了《{name}》"
+                ),
+                metadata={
+                    "up_name": name,
+                    "sign": sign,
+                },
+            )
+        )
+    bilibili_event_count = len(events)
+    events_to_persist = list(events)
+    events.extend(xhs_events)
+    events.extend(dy_events)
+    events.extend(yt_events)
+    _maybe_update_init_source_shares(
+        {
+            "bilibili": bilibili_event_count,
+            "xiaohongshu": len(xhs_events),
+            "douyin": len(dy_events),
+            "youtube": len(yt_events),
+        }
+    )
+    for event in events_to_persist:
+        await memory.propagate_event(event)
+    await _stage_done(1)
+
+    # ── Stage 2: analyze preferences ──
+    await _stage_started(2)
+    _print_section_title("2/4 分析偏好")
+    console.print(f"  总信号量: [green]{len(events)}[/green] 条事件")
+    # Chunk the event list so multiple analysis calls run concurrently
+    # instead of serialising one max-thinking call over ~800 events.
+    await _run_with_progress(
+        soul_engine.analyze_events(events, event_chunk_size=200),
+        label="分析偏好(4 个并发分片)",
+        eta_seconds=180,
+    )
+    await _stage_done(2)
+
+    # ── Stage 3 + 4: build profile ‖ discovery backfill (parallel) ──
+    await _stage_started(3)
+    await _stage_started(4)
+    _print_section_title("3/4 生成画像 + 4/4 发现内容(并发)")
+    combined_history: list[dict[str, Any]] = list(history)
+    if favorites_data:
+        combined_history.append(
+            {
+                "title": "[收藏夹汇总]",
+                "_favorites": favorites_data,
+                "_favorites_summary": f"共 {len(favorites_data)} 个收藏，"
+                + "涵盖: "
+                + ", ".join(
+                    set(f.get("folder", "") for f in favorites_data[:100] if f.get("folder"))
+                ),
+            }
+        )
+    if following_data:
+        combined_history.append(
+            {
+                "title": "[关注列表汇总]",
+                "_following": following_data,
+                "_following_summary": f"共关注 {len(following_data)} 人，"
+                + "包括: "
+                + ", ".join(f["name"] for f in following_data[:100]),
+            }
+        )
+    if xhs_events:
+        combined_history.extend(_xhs_events_to_history_items(xhs_events))
+    if dy_events:
+        combined_history.extend(_dy_events_to_history_items(dy_events))
+    if yt_events:
+        combined_history.extend(_yt_events_to_history_items(yt_events))
+
+    # Discover starts on a preference-only draft so trending / search /
+    # related_chain / explore can score candidates while the LLM
+    # synthesizes the rich personality_portrait / deep_needs fields.
+    draft_profile = _build_draft_profile_for_discover(memory)
+
+    profile_task = asyncio.create_task(
+        _run_with_progress(
+            soul_engine.build_initial_profile(combined_history),
+            label="生成画像(单次 LLM 综合分析)",
+            eta_seconds=70,
+        )
+    )
+    discover_task = asyncio.create_task(
+        discover_backfill(
+            draft_profile,
+            target_pool_count=target_pool_count,
+            label_suffix=" — 用 P2 草稿画像并发预热",
+        )
+    )
+    try:
+        profile_data = await profile_task
+    except Exception as exc:
+        # Profile is load-bearing — cancel discover and surface a hard
+        # failure (the CLI exits; the API marks the run failed).
+        discover_task.cancel()
+        with suppress(BaseException):
+            await discover_task
+        raise GuidedInitError(
+            "profile_failed",
+            "画像生成阶段出错。可稍后手动重试 `openbiliclaw init`。",
+        ) from exc
+    await _stage_done(3)
+
+    try:
+        discovered_count = await discover_task
+        discover_exc: BaseException | None = None
+    except BaseException as exc:
+        # Discover is best-effort — a partial pool still lets the user
+        # start; record the failure for a "partial complete" summary.
+        discovered_count = 0
+        discover_exc = exc
+    await _stage_done(4)
+
+    return InitResult(
+        history=history,
+        favorites_data=favorites_data,
+        following_data=following_data,
+        events=events,
+        bilibili_event_count=bilibili_event_count,
+        xhs_events=xhs_events,
+        xhs_scope_counts=xhs_scope_counts,
+        xhs_status=xhs_status,
+        dy_events=dy_events,
+        dy_scope_counts=dy_scope_counts,
+        dy_status=dy_status,
+        yt_events=yt_events,
+        yt_scope_counts=yt_scope_counts,
+        yt_status=yt_status,
+        profile_data=profile_data,
+        discovered_count=discovered_count,
+        discovery_error=discover_exc is not None,
+        discover_exc=discover_exc,
+    )
+
+
 @app.command()
 def init(
     no_xhs: bool = typer.Option(
@@ -4217,76 +4656,6 @@ def init(
         "[dim]全程会打印进度，不要以为卡住了——LLM 单次响应可能就要 10–30s。[/dim]\n"
     )
 
-    # Fetch all data sources in a single event loop to avoid httpx session closure.
-    # Init signal mix:
-    #   - 300 most-recent watch history items (truncated; older history
-    #     decays into noise quickly)
-    #   - up to 300 favorites across folders (high-signal user curation,
-    #     but too many low-recency saves dominate init cost)
-    #   - up to 100 followed creators (high-signal subscription intent)
-    resolved_bilibili_favorite_limit = _INIT_BILIBILI_FAVORITE_LIMIT
-    resolved_bilibili_follow_limit = _INIT_BILIBILI_FOLLOW_LIMIT
-
-    async def _fetch_all_data() -> tuple[
-        list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
-    ]:
-        hist = await client.get_user_history(max_items=_INIT_BILIBILI_HISTORY_LIMIT)
-
-        favs: list[dict[str, Any]] = []
-        try:
-            fav_folders = (
-                await client.get_all_favorites(
-                    max_folders=200,
-                    max_items_per_folder=max(1, resolved_bilibili_favorite_limit),
-                )
-                if resolved_bilibili_favorite_limit > 0
-                else []
-            )
-            for folder in fav_folders:
-                folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
-                for item in folder.items if hasattr(folder, "items") else []:
-                    if len(favs) >= resolved_bilibili_favorite_limit:
-                        break
-                    upper = item.get("upper", {}) if isinstance(item, dict) else {}
-                    if not isinstance(upper, dict):
-                        upper = {}
-                    favs.append(
-                        {
-                            "title": item.get("title", "") if isinstance(item, dict) else str(item),
-                            "upper": str(upper.get("name", "")).strip(),
-                            "folder": folder_title,
-                        }
-                    )
-                if len(favs) >= resolved_bilibili_favorite_limit:
-                    break
-        except Exception as exc:
-            console.print(f"  [yellow]收藏夹拉取失败: {exc}[/yellow]")
-
-        follows: list[dict[str, Any]] = []
-        try:
-            page = 1
-            page_size = 50
-            while len(follows) < resolved_bilibili_follow_limit:
-                page_users = await client.get_following(page=page, page_size=page_size)
-                if not page_users:
-                    break
-                for user in page_users:
-                    if len(follows) >= resolved_bilibili_follow_limit:
-                        break
-                    follows.append(
-                        {
-                            "name": getattr(user, "uname", str(user)),
-                            "sign": getattr(user, "sign", ""),
-                        }
-                    )
-                if len(page_users) < page_size:
-                    break
-                page += 1
-        except Exception as exc:
-            console.print(f"  [yellow]关注列表拉取失败: {exc}[/yellow]")
-
-        return hist, favs, follows
-
     # v0.3.89+: ask user whether the backend should be reachable from
     # the local network (0.0.0.0) so mobile /m/ works out of the box.
     allow_lan = _ask_network_binding()
@@ -4340,284 +4709,48 @@ def init(
         include_yt=include_yt,
     )
 
-    # Enqueue the XHS bootstrap task FIRST so the browser extension
-    # can run it in parallel with the slow B站 history/favs/follows
-    # fetches below (~10–30s). XHS is HTTP-only on B站's side so
-    # there's no browser-tab focus conflict; XHS extension WILL grab
-    # focus but that's fine because nothing else fights it.
-    #
-    # Douyin is enqueued LATER, AFTER XHS finishes, to avoid two
-    # active-tab grabs racing each other (each platform's dispatcher
-    # opens its own foreground tab; running both at once means tabs
-    # interrupt each other's scrolling and Douyin's risk control sees
-    # rapid focus changes as automation). v0.3.66+: serialised XHS→DY
-    # to fix the focus war user reported.
-    xhs_task_id = _enqueue_xhs_bootstrap_task() if include_xhs else None
-    if xhs_task_id:
-        console.print("  [dim]已请求扩展拉小红书收藏 / 点赞（后台并行,不阻塞 B 站拉取）。[/dim]")
-
-    _print_section_title("1/4 拉取数据")
-    history, favorites_data, following_data = asyncio.run(_fetch_all_data())
-    if not history:
-        _print_status_panel("warning", "历史为空", "当前无法从 B 站历史中生成初始画像。")
-        raise typer.Exit(code=1)
-    console.print(
-        f"  浏览历史 [green]{len(history)}[/green] 条"
-        f" / 收藏 [green]{len(favorites_data)}[/green] 个"
-        f" / 关注 [green]{len(following_data)}[/green] 人"
-    )
-
-    # Now collect the XHS task. By this point the extension has had
-    # the duration of B站 fetches to run; max_wait_seconds is the
-    # *additional* wait on top of that. 30s default covers the
-    # tail-end of normal completions on slow networks.
-    xhs_events, xhs_scope_counts, xhs_status = _collect_xhs_bootstrap_events(xhs_task_id)
-    if xhs_status == "ok":
-        console.print(
-            "  小红书 "
-            f"收藏 [green]{xhs_scope_counts.get('saved', 0)}[/green] 个"
-            f" / 点赞 [green]{xhs_scope_counts.get('liked', 0)}[/green] 个"
-            f" / 浏览记录 [green]{xhs_scope_counts.get('xhs_history', 0)}[/green] 个"
-        )
-    elif xhs_status == "empty":
-        console.print(
-            "  [yellow]小红书任务跑通但 0 条 notes —— "
-            "可能未登录小红书 / 个人主页没有公开收藏 / 页面 state 漂移。[/yellow]"
-        )
-    elif xhs_status == "timeout":
-        console.print(
-            "  [dim]小红书初始化信号未导入：扩展未连接或任务仍在后台跑。"
-            "可设 OPENBILICLAW_XHS_BOOTSTRAP_WAIT_SECONDS=180 延长等待。[/dim]"
-        )
-    elif xhs_status == "failed":
-        console.print("  [yellow]小红书任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
-    # status == "skipped" is silent (DB unavailable / budget exhausted —
-    # already printed by _enqueue_xhs_bootstrap_task)
-
-    # Now (XHS done) enqueue Douyin. Serialised so the two browser-
-    # focus-grabbing dispatchers don't race for the same active tab.
-    dy_task_id = _enqueue_dy_bootstrap_task() if include_dy else None
-    if dy_task_id:
-        console.print(
-            "  [dim]已请求扩展拉抖音发布 / 收藏 / 点赞 / 关注"
-            "(开始抢一次浏览器焦点,~60-90 秒)。[/dim]"
-        )
-    dy_events, dy_scope_counts, dy_status = _collect_dy_bootstrap_events(dy_task_id)
-    if dy_status == "ok":
-        console.print(
-            "  抖音 "
-            f"发布 [green]{dy_scope_counts.get('dy_post', 0)}[/green] 条"
-            f" / 收藏 [green]{dy_scope_counts.get('dy_collect', 0)}[/green] 个"
-            f" / 点赞 [green]{dy_scope_counts.get('dy_like', 0)}[/green] 个"
-            f" / 关注 [green]{dy_scope_counts.get('dy_follow', 0)}[/green] 人"
-        )
-    elif dy_status == "empty":
-        console.print(
-            "  [yellow]抖音任务跑通但 0 条 videos —— "
-            "未登录抖音(常见,抖音对未登录返回 200+空 body),或个人主页隐私设置阻拦。[/yellow]"
-        )
-    elif dy_status == "timeout":
-        console.print(
-            "  [dim]抖音初始化信号未导入:扩展未连接或任务仍在后台跑。"
-            "可设 OPENBILICLAW_DY_BOOTSTRAP_WAIT_SECONDS=180 延长等待。[/dim]"
-        )
-    elif dy_status == "failed":
-        console.print("  [yellow]抖音任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
-
-    # YouTube is enqueued AFTER Douyin completes — same serialisation
-    # rationale as XHS→Douyin: each dispatcher opens a foreground tab
-    # and grabs focus; running two at once causes tab-focus races and
-    # confuses YouTube's lazy-loader.
-    yt_task_id = _enqueue_yt_bootstrap_task() if include_yt else None
-    if yt_task_id:
-        console.print(
-            "  [dim]已请求扩展拉 YouTube 观看历史 / 订阅 / 点赞"
-            "(开始抢一次浏览器焦点,~30-90 秒)。[/dim]"
-        )
-    yt_events, yt_scope_counts, yt_status = _collect_yt_bootstrap_events(yt_task_id)
-    if yt_status == "ok":
-        console.print(
-            "  YouTube "
-            f"观看历史 [green]{yt_scope_counts.get('yt_history', 0)}[/green] 条"
-            f" / 订阅 [green]{yt_scope_counts.get('yt_subscriptions', 0)}[/green] 个"
-            f" / 点赞 [green]{yt_scope_counts.get('yt_likes', 0)}[/green] 个"
-        )
-    elif yt_status == "empty":
-        console.print(
-            "  [yellow]YouTube 任务跑通但 0 条记录 —— 未登录 YouTube 或页面内容为空。[/yellow]"
-        )
-    elif yt_status == "timeout":
-        console.print(
-            "  [dim]YouTube 初始化信号未导入:扩展未连接或任务仍在后台跑。"
-            "可设 OPENBILICLAW_YT_BOOTSTRAP_WAIT_SECONDS=300 延长等待。[/dim]"
-        )
-    elif yt_status == "failed":
-        console.print("  [yellow]YouTube 任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
-
-    # Build events from all data sources via the unified event_format
-    # builder (v0.3.22+) so B站 / 小红书 / future-source events all carry
-    # the same shape — including a natural-language ``context`` the
-    # soul-pipeline LLM analyzers can read uniformly.
-    from openbiliclaw.sources.event_format import SOURCE_BILIBILI, build_event
-
-    events = [_history_item_to_event(item) for item in history]
-    for fav in favorites_data:
-        folder = str(fav.get("folder", "")).strip()
-        upper = str(fav.get("upper", "")).strip()
-        events.append(
-            build_event(
-                event_type="favorite",
-                source_platform=SOURCE_BILIBILI,
-                title=str(fav.get("title", "")),
-                author=upper,
-                metadata={
-                    "folder": folder,
-                    # ``upper`` kept for backwards compatibility with
-                    # downstream consumers that still grep for it.
-                    "upper": upper,
-                },
-            )
-        )
-    for user in following_data:
-        sign = str(user.get("sign", "")).strip()
-        name = str(user.get("name", ""))
-        events.append(
-            build_event(
-                event_type="follow",
-                source_platform=SOURCE_BILIBILI,
-                title=name,
-                author=name,
-                # ``follow`` rendering benefits from showing the user's
-                # signature line — that's where their stated identity
-                # lives. ``extra`` flows through to format_event_context
-                # only via custom override; pre-build the context here.
-                context=(
-                    f"在 B 站关注了《{name}》,签名:{sign}" if sign else f"在 B 站关注了《{name}》"
-                ),
-                metadata={
-                    "up_name": name,
-                    "sign": sign,
-                },
-            )
-        )
-    bilibili_event_count = len(events)
-    events_to_persist = list(events)
-    events.extend(xhs_events)
-    events.extend(dy_events)
-    events.extend(yt_events)
-    _maybe_update_init_source_shares(
-        {
-            "bilibili": bilibili_event_count,
-            "xiaohongshu": len(xhs_events),
-            "douyin": len(dy_events),
-            "youtube": len(yt_events),
-        }
-    )
-    for event in events_to_persist:
-        asyncio.run(memory.propagate_event(event))
-
-    _print_section_title("2/4 分析偏好")
-    console.print(f"  总信号量: [green]{len(events)}[/green] 条事件")
-    # Chunk the event list so multiple analysis calls run concurrently
-    # instead of serialising a single max-thinking call over ~800 events.
-    # ``merge_preferences`` folds the partial results back together.
-    asyncio.run(
-        _run_with_progress(
-            soul_engine.analyze_events(events, event_chunk_size=200),
-            label="分析偏好(4 个并发分片)",
-            eta_seconds=180,
-        )
-    )
-
-    _print_section_title("3/4 生成画像 + 4/4 发现内容(并发)")
-    # Merge favorites and following into history for profile builder
-    combined_history: list[dict[str, Any]] = list(history)
-    if favorites_data:
-        combined_history.append(
-            {
-                "title": "[收藏夹汇总]",
-                "_favorites": favorites_data,
-                "_favorites_summary": f"共 {len(favorites_data)} 个收藏，"
-                + "涵盖: "
-                + ", ".join(
-                    set(f.get("folder", "") for f in favorites_data[:100] if f.get("folder"))
-                ),
-            }
-        )
-    if following_data:
-        combined_history.append(
-            {
-                "title": "[关注列表汇总]",
-                "_following": following_data,
-                "_following_summary": f"共关注 {len(following_data)} 人，"
-                + "包括: "
-                + ", ".join(f["name"] for f in following_data[:100]),
-            }
-        )
-    if xhs_events:
-        combined_history.extend(_xhs_events_to_history_items(xhs_events))
-    if dy_events:
-        combined_history.extend(_dy_events_to_history_items(dy_events))
-    if yt_events:
-        combined_history.extend(_yt_events_to_history_items(yt_events))
-
-    # Parallel: build_initial_profile (P3) and discover (P4) overlap.
-    # Discover starts with a preference-only draft profile so trending /
-    # search / related_chain / explore can begin scoring candidates
-    # while the LLM synthesizes the rich personality_portrait /
-    # deep_needs fields. Once the build completes, the full profile is
-    # already saved to the soul memory layer for downstream callers.
-    draft_profile = _build_draft_profile_for_discover(memory)
-
-    discovered_count = 0
-    discovery_error = False
-    profile_data: Any = None
-
-    async def _run_p3_p4_parallel() -> tuple[Any, int, BaseException | None]:
-        profile_task = asyncio.create_task(
-            _run_with_progress(
-                soul_engine.build_initial_profile(combined_history),
-                label="生成画像(单次 LLM 综合分析)",
-                eta_seconds=70,
-            )
-        )
-        discover_task = asyncio.create_task(
-            _run_init_discovery_backfill_async(
-                draft_profile,
-                target_pool_count=_INIT_POOL_TARGET_COUNT,
-                label_suffix=" — 用 P2 草稿画像并发预热",
-            )
-        )
-        try:
-            built_profile = await profile_task
-        except Exception as exc:
-            # Propagate profile failure but let discover finish so we
-            # at least get some pool content.
-            discover_task.cancel()
-            with suppress(BaseException):
-                await discover_task
-            raise exc
-        try:
-            disc_count = await discover_task
-            disc_err: BaseException | None = None
-        except BaseException as exc:
-            disc_count = 0
-            disc_err = exc
-        return built_profile, disc_count, disc_err
-
+    # gui-init (B2): the four init stages now run inside the shared async
+    # pipeline run_guided_init so the API can reuse them without nesting
+    # event loops. The CLI injects the one-shot discovery backfill and
+    # renders the summary below from the returned InitResult.
     try:
-        profile_data, discovered_count, discover_exc = asyncio.run(_run_p3_p4_parallel())
-    except Exception as exc:
-        discovery_error = True
-        _print_status_panel(
-            "error",
-            "失败",
-            "画像生成阶段出错。可稍后手动重试 `openbiliclaw init`。",
+        result = asyncio.run(
+            run_guided_init(
+                client=client,
+                memory=memory,
+                soul_engine=soul_engine,
+                favorite_limit=resolved_bilibili_favorite_limit,
+                follow_limit=resolved_bilibili_follow_limit,
+                include_xhs=include_xhs,
+                include_dy=include_dy,
+                include_yt=include_yt,
+                target_pool_count=_INIT_POOL_TARGET_COUNT,
+                discover_backfill=_run_init_discovery_backfill_async,
+            )
         )
+    except GuidedInitError as exc:
+        if exc.reason == "empty_history":
+            _print_status_panel("warning", "历史为空", exc.message)
+        else:
+            _print_status_panel("error", "失败", exc.message)
         raise typer.Exit(code=1) from exc
 
-    if discover_exc is not None:
-        discovery_error = True
+    history = result.history
+    favorites_data = result.favorites_data
+    following_data = result.following_data
+    events = result.events
+    xhs_events = result.xhs_events
+    xhs_scope_counts = result.xhs_scope_counts
+    xhs_status = result.xhs_status
+    dy_events = result.dy_events
+    dy_scope_counts = result.dy_scope_counts
+    yt_events = result.yt_events
+    yt_scope_counts = result.yt_scope_counts
+    yt_status = result.yt_status
+    discovered_count = result.discovered_count
+    discovery_error = result.discovery_error
+
+    if result.discover_exc is not None:
         _print_status_panel(
             "warning",
             "部分完成",
