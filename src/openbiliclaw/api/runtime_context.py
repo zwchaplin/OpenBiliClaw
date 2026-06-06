@@ -248,6 +248,7 @@ class RuntimeContext:
     # current database / runtime_controller even after a hot-reload swaps them
     # (review R2 A-1). All three construct paths inherit it via the property.
     _init_coordinator: Any = field(default=None, init=False, repr=False, compare=False)
+    _init_prereqs: Any = field(default=None, init=False, repr=False, compare=False)
 
     # ── Swappable (rebuilt on hot-reload) ───────────────────────────
     config: Any = None
@@ -273,6 +274,15 @@ class RuntimeContext:
 
             self._init_coordinator = InitCoordinator(self)
         return self._init_coordinator
+
+    @property
+    def init_prereqs(self) -> Any:
+        """Cached guided-init prerequisite probes bound to this ctx (spec §3)."""
+        if self._init_prereqs is None:
+            from openbiliclaw.runtime.init_prereqs import InitPrereqs
+
+            self._init_prereqs = InitPrereqs(self)
+        return self._init_prereqs
 
     def background_llm_work_allowed(self) -> bool:
         """Return whether daemon-owned background LLM / embedding work may run."""

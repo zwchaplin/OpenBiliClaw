@@ -45,6 +45,43 @@ class HealthResponse(BaseModel):
     embedding_ready: bool | None = None
 
 
+class InitStageOut(BaseModel):
+    """One stage of guided init (gui-init spec API shape)."""
+
+    n: int
+    label: str
+    status: str  # pending | running | ok | warning | failed
+    reason: str | None = None
+
+
+class InitPrerequisitesOut(BaseModel):
+    """Pre-init checklist surfaced to the UI."""
+
+    bilibili_logged_in: bool = False
+    bilibili_check: str = "checking"  # ok | failed | checking
+    llm_ready: bool = False
+    embedding_ready: bool = False
+    enabled_platforms: list[str] = Field(default_factory=list)
+
+
+class InitStatusOut(BaseModel):
+    """Authoritative guided-init status / progress (gui-init spec API shape)."""
+
+    initialized: bool = False
+    running: bool = False
+    run_id: str | None = None
+    sequence: int = 0
+    current_stage: int = 0
+    total_stages: int = 4
+    stages: list[InitStageOut] = Field(default_factory=list)
+    partial_success: bool = False
+    can_start: bool = False
+    can_manage: bool = False
+    prerequisites: InitPrerequisitesOut = Field(default_factory=InitPrerequisitesOut)
+    reason: str = "none"
+    detail: str = ""
+
+
 class RecommendationOut(BaseModel):
     """Recommendation payload exposed to the popup."""
 

@@ -57,6 +57,9 @@ from openbiliclaw.api.models import (
     FeedbackIn,
     FeedbackResponse,
     HealthResponse,
+    InitPrerequisitesOut,
+    InitStageOut,
+    InitStatusOut,
     LLMConfigOut,
     LLMProviderConfigOut,
     LoggingConfigOut,
@@ -843,6 +846,7 @@ def create_app(
             or path == "/api/runtime-status"
             or path == "/api/autostart-status"
             or path == "/api/autostart/apply"
+            or path in ("/api/init-status", "/api/init", "/api/init/cancel")
             or (path == "/api/config" and method in {"GET", "PUT"})
             or path.startswith("/api/auth")
             or path.startswith("/m")
@@ -1198,6 +1202,62 @@ def create_app(
             profile_ready=profile_ready,
             lan_ip=lan_ip,
             embedding_ready=embedding_ready,
+        )
+
+    @app.get("/api/init-status", response_model=InitStatusOut)
+    async def init_status(request: Request) -> InitStatusOut:
+        """Authoritative guided-init status + pre-init checklist (gui-init §3).
+
+        Remote-readable (mirrors autostart-status): a non-local caller still
+        sees the state but ``can_manage`` is False. Degraded-mode readable.
+        """
+        from openbiliclaw.docker_runtime import is_running_in_container
+
+        coord = ctx.init_coordinator
+        prereqs = ctx.init_prereqs
+        run = coord.get_status()
+        bili = await prereqs.bilibili_check()
+        chat = await prereqs.chat_ready()
+        embedding = await _health_embedding_ready()
+        platforms = prereqs.enabled_platforms()
+        initialized = bool(_health_profile_ready())
+        trusted = _get_auth_gate().is_trusted_local(request)
+        supported = not is_running_in_container()
+        running = bool(run["running"])
+        hard_ok = (bili == "ok") and chat
+        can_start = trusted and supported and hard_ok and not running
+
+        if not supported:
+            reason, detail = "unsupported_runtime", "Docker 运行时不支持图形化初始化"
+        elif running:
+            reason, detail = "already_running", "初始化进行中"
+        elif bili != "ok":
+            reason, detail = "bilibili_not_logged_in", "还没检测到 B站 登录"
+        elif not chat:
+            reason, detail = "llm_not_ready", "AI 服务还没配好或当前不可用"
+        else:
+            reason, detail = "none", ""
+
+        return InitStatusOut(
+            initialized=initialized,
+            running=running,
+            run_id=run["run_id"],
+            sequence=run["sequence"],
+            current_stage=run["current_stage"],
+            total_stages=run["total_stages"],
+            stages=[InitStageOut(**s) for s in run["stages"]],
+            partial_success=bool(run["partial_success"]),
+            can_start=can_start,
+            can_manage=trusted,
+            prerequisites=InitPrerequisitesOut(
+                bilibili_logged_in=(bili == "ok"),
+                bilibili_check=bili,
+                llm_ready=chat,
+                embedding_ready=embedding,
+                enabled_platforms=platforms,
+            ),
+            reason=reason,
+            detail=detail,
         )
 
     @app.get("/api/image-proxy", response_model=None)

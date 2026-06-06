@@ -196,3 +196,26 @@ def test_startup_reconciles_stale_init_run(tmp_path: Path) -> None:
     run = db.get_latest_init_run()
     assert run["status"] == "failed"
     assert run["error_reason"] == "interrupted"
+
+
+def test_init_status_endpoint_shape(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from openbiliclaw.api.app import create_app
+
+    db = Database(tmp_path / "e1.db")
+    db.initialize()
+    app = create_app(memory_manager=object(), database=db, soul_engine=object())
+    with TestClient(app) as client:
+        resp = client.get("/api/init-status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["running"] is False
+    assert body["initialized"] is False
+    assert body["total_stages"] == 4
+    assert len(body["stages"]) == 4
+    # No configured cookie / chat creds in this minimal app → can't start.
+    assert body["prerequisites"]["bilibili_check"] == "failed"
+    assert body["can_start"] is False
+    assert body["reason"] in ("bilibili_not_logged_in", "unsupported_runtime", "llm_not_ready")
