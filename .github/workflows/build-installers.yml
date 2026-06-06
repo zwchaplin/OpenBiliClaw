@@ -1,0 +1,112 @@
+name: Build Desktop Installers
+
+# Manual-only. Produces downloadable Actions ARTIFACTS (macOS .dmg / Windows
+# .exe installer) — it does NOT create a GitHub Release and is NOT triggered by
+# any tag push. Backend release policy stays "source-only"; this is just an
+# on-demand convenience build for people who want a packaged installer.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for artifact filenames (e.g. v0.3.101). Defaults to pyproject version."
+        required: false
+        default: ""
+
+# Read-only token: this workflow structurally cannot publish a Release.
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS installer (.dmg, arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pyinstaller
+
+      - name: Install Ollama (bundled into the app for local bge-m3 embedding)
+        run: brew install ollama
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else
+            v="v$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build .app + .dmg (auto-bundles ollama)
+        run: python packaging/build.py --clean --archive-version "${{ steps.ver.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbiliclaw-macos-installer
+          path: |
+            dist/release/*.dmg
+            dist/release/*.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pyinstaller
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else
+            v="v$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "bare=${v#v}" >> "$GITHUB_OUTPUT"
+
+      - name: PyInstaller onedir build (ollama staged separately below)
+        run: python packaging/build.py --clean --no-bundle-ollama
+
+      - name: Stage bundled Ollama (CPU runner only — bge-m3 embedding is CPU)
+        shell: pwsh
+        run: |
+          $ver = "0.18.2"
+          Invoke-WebRequest "https://github.com/ollama/ollama/releases/download/v$ver/ollama-windows-amd64.zip" -OutFile ollama.zip
+          Expand-Archive ollama.zip -DestinationPath ollama_win -Force
+          Copy-Item ollama_win\ollama.exe dist\OpenBiliClaw\ollama.exe -Force
+          if (Test-Path ollama_win\lib) {
+            Copy-Item ollama_win\lib dist\OpenBiliClaw\lib -Recurse -Force
+            # Drop large GPU runners; keep the installer lean (embedding runs on CPU).
+            Get-ChildItem dist\OpenBiliClaw\lib\ollama -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match 'cuda|rocm' } |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.ver.outputs.bare }} packaging\openbiliclaw.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbiliclaw-windows-installer
+          path: dist/release/*.exe
+          if-no-files-found: error
