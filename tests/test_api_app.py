@@ -6884,6 +6884,29 @@ class TestGuidedInitEndpoints:
         assert resp.status_code == 409
         assert resp.json()["error"] == "init_running"
 
+    def test_deny_by_default_gates_arbitrary_writer_during_init(self, tmp_path: Path) -> None:
+        from fastapi.testclient import TestClient
+
+        # Deny-by-default: a mutating endpoint that isn't on the init allowlist
+        # is 409'd during init even though it's not individually enumerated.
+        app, _ = self._make_app(tmp_path)
+        with TestClient(app) as client:
+            app.state.runtime_context.init_coordinator.try_start("active")
+            resp = client.post("/api/watch-later", json={"bvid": "BV1xx"})
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "init_running"
+
+    def test_dispatcher_kick_allowed_during_init(self, tmp_path: Path) -> None:
+        from fastapi.testclient import TestClient
+
+        # Init's own enqueue kicks /api/sources/<src>/kick — it must pass the
+        # gate (the bootstrap protocol), so it's never the init 409.
+        app, _ = self._make_app(tmp_path)
+        with TestClient(app) as client:
+            app.state.runtime_context.init_coordinator.try_start("active")
+            resp = client.post("/api/sources/xhs/kick", json={})
+        assert not (resp.status_code == 409 and resp.json().get("error") == "init_running")
+
     def test_task_result_not_gated_during_init(self, tmp_path: Path) -> None:
         from fastapi.testclient import TestClient
 

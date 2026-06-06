@@ -881,41 +881,42 @@ def create_app(
         except Exception:
             return False
 
-    # Writers that mutate the soul profile / discovery pool or trigger a runtime
-    # rebuild — these must not run concurrently with guided init (gui-init D1).
-    # EXCLUDED on purpose: /api/bilibili/cookie (in-handler no-op so the
-    # extension auto-sync doesn't error) and /api/sources/*/task-result (init's
-    # own bootstrap collectors need those to land — those handlers instead skip
-    # pool writes during init and only propagate init-OWNED results, see D1).
-    _init_gated_write_paths = frozenset(
+    # gui-init D1 — DENY-BY-DEFAULT writer gating. While a guided init is active,
+    # every mutating request (POST/PUT/PATCH/DELETE) is rejected with 409 unless
+    # it is on the small allowlist of init-essential writers below. An allowlist
+    # of *blocked* paths is fragile (every new soul/pool writer must remember to
+    # opt in); denying by default means no writer can silently race init.
+    #
+    # Allowed during init:
+    #  - /api/init, /api/init/cancel        — init control itself
+    #  - /api/bilibili/cookie               — handler no-ops during init
+    #  - /api/auth/*                        — auth-gate management (login/admin)
+    #  - /api/sources/*/kick                — init's own dispatcher kick
+    #  - /api/sources/*/task-result         — init bootstrap results (the handler
+    #                                         self-guards: skips pool writes and
+    #                                         only propagates init-owned results)
+    # (GET reads — /api/sources/*/next-task, /api/init-status, … — are never
+    #  gated since only mutating methods are checked.)
+    _init_write_allowlist = frozenset(
         {
-            "/api/events",
-            "/api/feedback",
-            "/api/recommendation-click",
-            "/api/profile/edit",
-            "/api/config",
-            "/api/recommendations/refresh",
-            "/api/interest-probes/trigger",
-            "/api/interest-probes/respond",
-            "/api/avoidance-probes/trigger",
-            "/api/avoidance-probes/respond",
-            "/api/delight/respond",
-            "/api/chat",
-            "/api/chat/turns",
-            "/api/init-completed",
-            "/api/sources",
+            "/api/init",
+            "/api/init/cancel",
+            "/api/bilibili/cookie",
         }
     )
 
+    def _init_write_allowed(path: str) -> bool:
+        if path in _init_write_allowlist or path.startswith("/api/auth"):
+            return True
+        return path.startswith("/api/sources/") and (
+            path.endswith("/kick") or path.endswith("/task-result")
+        )
+
     @app.middleware("http")
     async def _init_active_write_guard(request: Request, call_next: Any) -> Any:
-        method = request.method.upper()
-        if method in {"POST", "PUT"}:
+        if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
             path = request.url.path
-            gated = path in _init_gated_write_paths or (
-                method == "PUT" and path.startswith("/api/sources/")
-            )
-            if gated and _init_active_now():
+            if not _init_write_allowed(path) and _init_active_now():
                 return JSONResponse(
                     {"error": "init_running", "detail": "初始化进行中，请稍后再试"},
                     status_code=409,
