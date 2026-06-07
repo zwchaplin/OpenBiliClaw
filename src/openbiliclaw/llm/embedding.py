@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import Protocol
@@ -54,24 +55,34 @@ class EmbeddingCache:
     Stores text → vector mappings in a dedicated table so embeddings
     computed during discovery survive process restarts and are reusable
     during recommendation serving without any API calls.
+
+    Thread-safe: the cache is read/written from background discovery and
+    recommendation-prewarm workers running on different threads, so the single
+    connection is opened with ``check_same_thread=False`` and every access is
+    serialized by an ``RLock`` (a bare ``sqlite3`` connection otherwise raises
+    "SQLite objects created in a thread can only be used in that same thread").
     """
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
 
     def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), timeout=10.0)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS embedding_cache (
-                text_key TEXT PRIMARY KEY,
-                vector   TEXT NOT NULL,
-                model    TEXT DEFAULT ''
-            )"""
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn = sqlite3.connect(
+                str(self._db_path), timeout=10.0, check_same_thread=False
+            )
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS embedding_cache (
+                    text_key TEXT PRIMARY KEY,
+                    vector   TEXT NOT NULL,
+                    model    TEXT DEFAULT ''
+                )"""
+            )
+            self._conn.commit()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -80,10 +91,11 @@ class EmbeddingCache:
         return self._conn
 
     def get(self, key: str) -> list[float] | None:
-        row = self.conn.execute(
-            "SELECT vector FROM embedding_cache WHERE text_key = ?",
-            (key,),
-        ).fetchone()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT vector FROM embedding_cache WHERE text_key = ?",
+                (key,),
+            ).fetchone()
         if row is None:
             return None
         try:
@@ -92,15 +104,17 @@ class EmbeddingCache:
             return None
 
     def put(self, key: str, vector: list[float], model: str = "") -> None:
-        self.conn.execute(
-            """INSERT OR REPLACE INTO embedding_cache (text_key, vector, model)
-               VALUES (?, ?, ?)""",
-            (key, json.dumps(vector), model),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO embedding_cache (text_key, vector, model)
+                   VALUES (?, ?, ?)""",
+                (key, json.dumps(vector), model),
+            )
+            self.conn.commit()
 
     def count(self) -> int:
-        row = self.conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()
+        with self._lock:
+            row = self.conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()
         return row[0] if row else 0
 
 

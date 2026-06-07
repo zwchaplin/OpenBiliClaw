@@ -104,7 +104,12 @@ def _ollama_start_serve_background() -> bool:
 
     try:
         if os.name == "nt":
-            creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
+            # CREATE_NO_WINDOW (not DETACHED_PROCESS): give `ollama serve` a
+            # hidden console that its child `ollama runner` inherits, so neither
+            # flashes a window. DETACHED_PROCESS leaves the runner with no console
+            # to inherit, so it allocates its own *visible* conhost — the window
+            # flashing users saw on the packaged tray app.
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
             )
             subprocess.Popen(
