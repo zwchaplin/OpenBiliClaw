@@ -33,6 +33,13 @@ DisableProgramGroupPage=yes
 ; Per-user install → no admin rights, no UAC prompt. The app is unsigned, so
 ; this keeps install friction as low as possible (SmartScreen may still warn).
 PrivilegesRequired=lowest
+; Upgrades fail with "files in use" if the previous OpenBiliClaw is still
+; running (it holds OpenBiliClaw.exe + bundled ollama + data\ open). Force the
+; Restart Manager to close anything holding our files, and the [Code] below
+; also taskkills the process tree as a belt-and-suspenders fallback (PyInstaller
+; console apps don't always cooperate with RM).
+CloseApplications=force
+RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Script lives in packaging\; resolve [Files] Source + OutputDir from repo root.
@@ -62,3 +69,25 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 ; NOTE: user data (config.toml, data\, logs\) lives next to the exe under {app}.
 ; We intentionally do NOT delete it on uninstall so reinstalling preserves the
 ; user's profile/database. Removing {app} fully is the user's choice.
+
+[Code]
+procedure StopRunningInstance;
+var
+  ResultCode: Integer;
+begin
+  // Best-effort: terminate any running OpenBiliClaw (and its child processes —
+  // the backend, and the bundled ollama it may have spawned) so their open file
+  // handles release before Setup overwrites {app}. taskkill is a no-op (nonzero
+  // exit, ignored) when nothing is running.
+  Exec(ExpandConstant('{cmd}'), '/C taskkill /IM "{#MyAppExeName}" /T /F', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Give Windows a moment to release the handles before the file copy begins.
+  Sleep(800);
+end;
+
+// Runs right before files are copied (both fresh installs and upgrades).
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningInstance;
+  Result := '';
+end;
