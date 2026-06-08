@@ -198,6 +198,18 @@ test("popup page is structured for side panel browsing", () => {
   assert.doesNotMatch(bodyBlock, /height:\s*560px;/);
 });
 
+test("init empty-state keeps full height so its start button stays scroll-reachable", () => {
+  const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
+  const emptyStateBlock = popupHtml.match(/\.empty-state\s*\{[\s\S]*?\}/)?.[0] ?? "";
+
+  // In the flex column (.view { flex: 1 }) a shrinkable .empty-state got
+  // compressed in a short / narrow side panel; overflow:hidden then clipped the
+  // init "开始初始化" button AND the view fit exactly, so .content had nothing
+  // to scroll. flex-shrink:0 pins natural height → the tall card overflows into
+  // the .content scroller and the button is reachable again.
+  assert.match(emptyStateBlock, /flex-shrink:\s*0;/);
+});
+
 test("settings tabs use stable compact panels", () => {
   const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
   const tabsBlock = popupHtml.match(/\.settings-tabs\s*\{[\s\S]*?\}/)?.[0] ?? "";

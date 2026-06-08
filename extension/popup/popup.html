@@ -2792,6 +2792,12 @@
       padding: 28px 20px;
       text-align: center;
       overflow: hidden;
+      /* Never let the flex:1 column .view compress this card in a short or
+         narrow viewport. When it shrank, overflow:hidden clipped the init
+         "开始初始化" button AND the view then fit exactly, so .content had
+         nothing to scroll. Pinning natural height makes a tall card overflow
+         into the .content scroller instead, restoring scroll-to-button. */
+      flex-shrink: 0;
     }
 
     .empty-state::before {
