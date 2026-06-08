@@ -142,6 +142,7 @@ _EMBEDDING_READY_TTL_SECONDS = 30.0
 # pass) if the embedding service never answers.
 _EMBEDDING_FAIL_TTL_SECONDS = 8.0
 _EMBEDDING_PROBE_TIMEOUT_SECONDS = 15.0
+_LAN_IP_TTL_SECONDS = 30.0
 _AUTO_REPLENISH_DEBOUNCE_SECONDS = 30.0
 
 SOURCE_LABELS = {
@@ -188,6 +189,9 @@ def _interface_ipv4_candidates() -> list[str]:
     seen: set[str] = set()
     for command in commands:
         try:
+            run_kwargs: dict[str, object] = {}
+            if os.name == "nt":
+                run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             proc = subprocess.run(
                 command,
                 capture_output=True,
@@ -195,6 +199,7 @@ def _interface_ipv4_candidates() -> list[str]:
                 errors="replace",
                 timeout=2,
                 check=False,
+                **run_kwargs,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -1229,6 +1234,17 @@ def create_app(
             logger.debug("Health profile readiness check failed", exc_info=True)
             return None
 
+    _lan_ip_value: str | None = None
+    _lan_ip_checked_at = float("-inf")
+
+    def _health_lan_ip() -> str | None:
+        nonlocal _lan_ip_value, _lan_ip_checked_at
+        if time.monotonic() - _lan_ip_checked_at < _LAN_IP_TTL_SECONDS:
+            return _lan_ip_value
+        _lan_ip_value = _detect_lan_ip()
+        _lan_ip_checked_at = time.monotonic()
+        return _lan_ip_value
+
     # Embedding readiness is probed live (see _health_embedding_ready) and the
     # result cached here so frequent /api/health polls share one provider call.
     _embedding_ready_value = False
@@ -1300,7 +1316,7 @@ def create_app(
     @app.get("/api/health", response_model=HealthResponse, response_model_exclude_none=True)
     async def health() -> HealthResponse | JSONResponse:
         profile_ready = _health_profile_ready()
-        lan_ip = _detect_lan_ip()
+        lan_ip = _health_lan_ip()
         embedding_ready = await _health_embedding_ready()
         if bool(getattr(ctx, "degraded", False)):
             body: dict[str, object] = {

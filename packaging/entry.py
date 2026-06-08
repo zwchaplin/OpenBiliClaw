@@ -702,10 +702,12 @@ def main() -> None:
     import uvicorn
 
     app = create_app()
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    use_tray = _should_use_tray()
+    config_kwargs = {"access_log": False} if use_tray else {}
+    config = uvicorn.Config(app, host=host, port=port, log_level="info", **config_kwargs)
     server = uvicorn.Server(config)
 
-    if _should_use_tray():
+    if use_tray:
         # Windowed build: uvicorn runs in the background and a tray icon owns the
         # foreground (Windows system tray / macOS menu bar). No console window
         # appears; closing nothing stops it — only the tray menu's "退出" quits.
