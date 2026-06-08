@@ -45,6 +45,19 @@ def _isolate_runtime_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
 class TestBackendAPI:
     """Route-level tests for the plugin backend API."""
 
+    def test_desktop_web_index_cache_busts_static_assets(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        response = client.get("/web")
+
+        assert response.status_code == 200
+        assert response.headers.get("cache-control") == "no-store"
+        assert 'href="/web/assets/css/app.css?v=' in response.text
+        assert 'src="/web/assets/js/app.js?v=' in response.text
+
     @pytest.mark.asyncio
     async def test_runtime_context_presence_survives_rebuild(
         self,

@@ -12,6 +12,7 @@ import socket
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
@@ -670,10 +671,11 @@ def create_app(
                 "; ".join(str(getattr(issue, "message", issue)) for issue in ctx.degraded_issues),
             )
     app.state.runtime_context = ctx
+    auto_replenishment_task: asyncio.Task[None] | None = None
+    auto_replenishment_started_at = 0.0
     app.state.degraded = bool(getattr(ctx, "degraded", False))
     app.state.degraded_reason = str(getattr(ctx, "degraded_reason", ""))
     app.state.degraded_issues = list(getattr(ctx, "degraded_issues", []))
-    last_auto_replenish_at: float | None = None
 
     # ── Password gate (LAN/remote auth) ─────────────────────────────
     app.state.auth_gate = AuthGate(_auth_cfg, getattr(ctx, "database", None))
@@ -2740,6 +2742,12 @@ def create_app(
                 return max(0, int(count_pool()))
         return None
 
+    async def _run_auto_replenishment(trigger: Callable[[], Any]) -> None:
+        try:
+            await trigger()
+        except Exception:
+            logger.exception("Automatic pool replenishment failed")
+
     async def _trigger_replenishment_if_needed(*, force: bool = False) -> None:
         """Fire a background Discovery refresh when the pool runs low."""
         trigger = getattr(ctx.runtime_controller, "trigger_manual_refresh", None)
@@ -2752,24 +2760,24 @@ def create_app(
             if not curator.needs_replenishment():
                 return
 
-        nonlocal last_auto_replenish_at
+        nonlocal auto_replenishment_started_at, auto_replenishment_task
         now = time.monotonic()
         if (
-            last_auto_replenish_at is not None
-            and now - last_auto_replenish_at < _AUTO_REPLENISH_DEBOUNCE_SECONDS
+            auto_replenishment_task is not None
+            and not auto_replenishment_task.done()
         ):
-            logger.debug(
-                "Auto replenishment skipped by debounce (elapsed=%.1fs)",
-                now - last_auto_replenish_at,
-            )
+            logger.debug("Pool low - automatic replenishment already running; skipping")
+            return
+        if now - auto_replenishment_started_at < _AUTO_REPLENISH_DEBOUNCE_SECONDS:
+            logger.debug("Pool low - automatic replenishment recently requested; skipping")
             return
 
-        last_auto_replenish_at = now
-        try:
-            logger.info("Pool low — triggering automatic replenishment")
-            await trigger()
-        except Exception:
-            logger.exception("Automatic replenishment trigger failed")
+        auto_replenishment_started_at = now
+        logger.info("Pool low - triggering automatic replenishment")
+        task = asyncio.create_task(_run_auto_replenishment(trigger))
+        auto_replenishment_task = task
+        _fire_and_forget_tasks.add(task)
+        task.add_done_callback(_fire_and_forget_tasks.discard)
 
     @app.post("/api/recommendations/reshuffle", response_model=RecommendationReshuffleResponse)
     async def reshuffle_recommendations() -> RecommendationReshuffleResponse:
@@ -6623,6 +6631,49 @@ def create_app(
     # ── Desktop Web UI ───────────────────────────────────────────
     _desktop_dir = _Path(__file__).resolve().parent.parent / "web" / "desktop"
     if _desktop_dir.is_dir():
+        _desktop_index_path = _desktop_dir / "index.html"
+
+        def _desktop_asset_version() -> str:
+            import hashlib
+
+            digest = hashlib.sha256()
+            for relative in ("assets/css/app.css", "assets/js/app.js"):
+                path = _desktop_dir / relative
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+                digest.update(relative.encode("utf-8"))
+                digest.update(str(stat.st_mtime_ns).encode("ascii"))
+                digest.update(str(stat.st_size).encode("ascii"))
+            return digest.hexdigest()[:12]
+
+        def _desktop_index_response() -> Response:
+            if not _desktop_index_path.is_file():
+                raise HTTPException(status_code=404, detail="desktop web index not found")
+            version = _desktop_asset_version()
+            html = _desktop_index_path.read_text(encoding="utf-8")
+            html = html.replace(
+                'href="/web/assets/css/app.css"',
+                f'href="/web/assets/css/app.css?v={version}"',
+            )
+            html = html.replace(
+                'src="/web/assets/js/app.js"',
+                f'src="/web/assets/js/app.js?v={version}"',
+            )
+            return Response(
+                html,
+                media_type="text/html; charset=utf-8",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @app.get("/web", include_in_schema=False)
+        def _desktop_index_no_slash() -> Response:
+            return _desktop_index_response()
+
+        @app.get("/web/", include_in_schema=False)
+        def _desktop_index_slash() -> Response:
+            return _desktop_index_response()
+
         app.mount("/web", _StaticFiles(directory=_desktop_dir, html=True), name="desktop-web")
 
         @app.get("/", include_in_schema=False)
