@@ -4342,6 +4342,7 @@ class Database:
         *,
         min_delight_score: float = 0.85,
         limit: int = 20,
+        include_liked: bool = False,
     ) -> list[dict[str, Any]]:
         """Return up to ``limit`` un-notified delight candidates ordered by score.
 
@@ -4353,16 +4354,28 @@ class Database:
         suppressed graveyard and surface 20 stale "surprises" on every
         extension reload (observed 2026-05-04: 562 suppressed items
         carried delight metadata vs 2 in fresh).
+
+        ``include_liked`` keeps ``feedback_type='like'`` rows in the result.
+        Queue re-hydration (``/api/delight/pending-batch``) passes True so a
+        liked delight stays visible until the user explicitly dismisses it —
+        positive feedback must not remove the card (v0.3.63 contract). New
+        delivery paths (WS push, counts, CLI) keep the default False so an
+        already-liked item is never re-pushed as a fresh surprise.
         """
+        feedback_clause = (
+            "COALESCE(feedback_type, '') IN ('', 'like')"
+            if include_liked
+            else "COALESCE(feedback_type, '') = ''"
+        )
         cursor = self.conn.execute(
-            """
+            f"""
             SELECT *
             FROM content_cache
             WHERE COALESCE(delight_score, 0.0) >= ?
               AND COALESCE(delight_notified, 0) = 0
               AND COALESCE(delight_reason, '') != ''
               AND COALESCE(delight_hook, '') != ''
-              AND COALESCE(feedback_type, '') = ''
+              AND {feedback_clause}
               AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown')
             ORDER BY delight_score DESC, relevance_score DESC, discovered_at DESC
             LIMIT ?

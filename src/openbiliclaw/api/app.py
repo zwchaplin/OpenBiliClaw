@@ -3165,12 +3165,19 @@ def create_app(
         re-hydrate the full queue on init, not for active push gating.
         Honors ``disliked_topics`` substring filter same as the singular
         endpoint.
+
+        ``include_liked=True``: a liked delight keeps its queue slot across
+        re-hydration (popup reopen / delight.refreshed) instead of silently
+        vanishing — positive feedback keeps the card visible until the user
+        dismisses it. Such rows come back with ``state="liked"`` so clients
+        render the already-liked treatment.
         """
         from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
 
         rows = ctx.database.get_delight_candidates(
             min_delight_score=DEFAULT_DELIGHT_THRESHOLD,
             limit=max(1, min(50, int(limit))),
+            include_liked=True,
         )
         # Reuse the same disliked-topic filter as get_pending_delight by
         # going through the runtime controller's loader if possible.
@@ -3192,6 +3199,9 @@ def create_app(
                 "cover_url": str(row.get("cover_url", "")),
                 "content_url": str(row.get("content_url", "")),
                 "source_platform": str(row.get("source_platform", "bilibili")),
+                "state": (
+                    "liked" if str(row.get("feedback_type", "") or "") == "like" else "pending"
+                ),
             }
             for row in rows
             if passes_filter(row)

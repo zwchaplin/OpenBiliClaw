@@ -39,7 +39,7 @@
 | M127b 避雷探针用户确认 | ✅ | WebSocket 推送 `avoidance.probe` → popup / Web / OpenClaw 卡片（确实不喜欢 / 不是 / 多聊聊）→ `POST /api/avoidance-probes/respond`；确认后写入 `disliked_topics` 并清理候选池，未确认时不参与过滤 |
 | M128 CLI delight + probe | ✅ | `openbiliclaw delight` 手动查看惊喜推荐候选；`openbiliclaw probe` 手动列出猜测方向并交互确认/拒绝 |
 | M129 惊喜候选自动预热与回填 | ✅ | delight 运行时统一使用共享阈值（默认 `0.70`，保守用户 `0.80`）；后台启动会自动补齐高分但缺 `reason/hook` 的候选，`suppressed` 高分库存也允许作为惊喜推荐入口 |
-| 惊喜推荐反馈保留 | ✅ | `POST /api/delight/respond` 中 `view / like / chat` 只记录正向学习信号并保留当前卡片；`dislike / dismiss` 才消费候选并驱动三端立即移除 |
+| 惊喜推荐反馈保留 | ✅ | `POST /api/delight/respond` 中 `view / like / chat` 只记录正向学习信号并保留当前卡片；`dislike / dismiss` 才消费候选并驱动三端立即移除。`pending-batch` 重灌以 `include_liked=True` 保留已喜欢候选并下发 `state="liked"`，喜欢过的卡片在 popup 重开后不再静默消失 |
 | v0.3.0 在线 supergroup 合并 | ✅ | `_merge_topic_supergroups` serve 时基于 embedding 把 `动漫杂谈/补番/解说` 等近义 topic 合并为同一聚类，让多样化器把它们当作一个桶 |
 | v0.3.0 reshuffle 性能优化 | ✅ | 三段并发：embedding `asyncio.gather` 并行（替代顺序 await）+ embedding cache key 改为 label-only（命中率 ~0% → ~100%）+ `batch_insert_recommendations` 单 transaction 插入 10 条（10 次 fsync → 1 次）。换一批 2.6s → 0.6s |
 | v0.3.0 supergroup embedding 预热 | ✅ | `prewarm_supergroup_embeddings` 在每次 refresh tick 后台并行预热所有池中 topic_group 的 embedding，让 reshuffle 跑全 cache hit |
@@ -284,6 +284,8 @@ Content-Type: application/json
 ### Delight Feedback
 
 `POST /api/delight/respond` 支持 `view / like / dislike / chat / dismiss`。`view / like / chat` 是正向或探索性表达，只记录点击、喜欢或对话学习信号，并让插件 side panel、桌面 Web 和移动 Web 保留当前惊喜卡片；`dislike / dismiss` 才会标记为 consumed/notified，并驱动三端立即移除该候选。
+
+正向保留跨重灌生效：`GET /api/delight/pending-batch` 以 `include_liked=True` 调用 `get_delight_candidates`，已点喜欢（`feedback_type='like'`）的候选在 popup 重开 / `delight.refreshed` 重灌后仍保留队列位置，并以 `state="liked"` 下发供三端恢复「已喜欢」展示；只有用户显式 `dismiss` / `dislike`（置 `delight_notified=1`）才会移出队列。WS 主动推送（`get_pending_delight`）、候选计数与 CLI 仍排除已喜欢项，避免把喜欢过的内容当新惊喜重复推送。
 
 ### PoolCurator
 

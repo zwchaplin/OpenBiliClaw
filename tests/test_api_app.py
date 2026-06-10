@@ -5429,6 +5429,61 @@ class TestBackendAPI:
         assert database.notified == ["BV1DL"]
         assert any("feedback_type='dislike'" in query for query, _params in database.writes)
 
+    def test_delight_pending_batch_keeps_liked_candidates_with_state(self) -> None:
+        """Liked delights survive queue re-hydration and come back as state=liked."""
+        from fastapi.testclient import TestClient
+
+        class FakeDatabase:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def get_delight_candidates(
+                self,
+                *,
+                min_delight_score: float,
+                limit: int,
+                include_liked: bool = False,
+            ) -> list[dict[str, object]]:
+                self.calls.append(
+                    {
+                        "min_delight_score": min_delight_score,
+                        "limit": limit,
+                        "include_liked": include_liked,
+                    }
+                )
+                return [
+                    {
+                        "bvid": "BV1LIKED",
+                        "title": "已喜欢的惊喜",
+                        "delight_reason": "liked reason",
+                        "delight_score": 0.95,
+                        "delight_hook": "liked hook",
+                        "feedback_type": "like",
+                    },
+                    {
+                        "bvid": "BV1FRESH",
+                        "title": "新惊喜",
+                        "delight_reason": "fresh reason",
+                        "delight_score": 0.94,
+                        "delight_hook": "fresh hook",
+                        "feedback_type": "",
+                    },
+                ]
+
+        database = FakeDatabase()
+        app = create_app(memory_manager=object(), database=database, soul_engine=object())
+        client = TestClient(app)
+
+        response = client.get("/api/delight/pending-batch")
+
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert [(item["bvid"], item["state"]) for item in items] == [
+            ("BV1LIKED", "liked"),
+            ("BV1FRESH", "pending"),
+        ]
+        assert database.calls and database.calls[0]["include_liked"] is True
+
     def test_delight_dismiss_marks_candidate_consumed(self) -> None:
         from fastapi.testclient import TestClient
 
