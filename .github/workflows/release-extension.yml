@@ -112,7 +112,11 @@ jobs:
           echo "Firefox release artifact ready: $firefox_archive"
 
       - name: Create GitHub Release and upload extension package
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-artifacts/openbiliclaw-extension-v*.zip
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release-artifacts/openbiliclaw-extension-v*.zip --clobber
