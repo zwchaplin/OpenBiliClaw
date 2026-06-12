@@ -4,14 +4,19 @@
 
 ---
 
-## v0.3.121: 12 小时画像自动整理（2026-06-12）
+## v0.3.122: 画像 prompt 截断治理 + 自动更新守卫落地（2026-06-13）
 
-画像从「只进不出地积累」变成「定期自我整理」：新增 ProfileConsolidator，每 12 小时按「规则合并 → embedding 聚类 → LLM 裁决 → 校验执行」流水线清理兴趣 / 避雷主题的措辞变体，应用前自动备份、可一键回滚；配套把画像有效上限提升到 64、画像输出去掉 UP 主维度并修复偏好合并 bug。后端源码更新走 `backend-v0.3.121`；浏览器插件与桌面安装包未改动（插件仍为 `0.3.78`）。
+对真实画像（千级兴趣标签、95 条避雷项）做了一次截断审计后的三项修复：整理任务覆盖整个有意义的标签存量、避雷项进 prompt 零截断、近期觉察/洞察改取最新。另外把 v0.3.121 changelog 已宣称但代码未随 tag 落地的自动更新守卫补强真正合入（`backend-v0.3.121` 不含该实现，git 安装需升到本版才生效）。后端源码更新走 `backend-v0.3.122`；浏览器插件与桌面安装包未改动（插件仍为 `0.3.78`）。
 
 - **画像整理覆盖范围 top-128 → top-512 + LLM 裁决分批**：实测千级兴趣标签存量下，整理只摸得到权重 top-128，绝大多数措辞变体永远在边界外；`_LIKES_BOUNDARY` 提到 512 后整理覆盖整个有意义的存量（深尾留给权重衰减）。配套把单次 LLM 裁决改为**每批 32 簇分批调用**——宽边界首轮可能产出上百个簇，单次大调用会把 JSON 输出顶到 token 上限截断在半截字符串上、全部簇被拒；分批后单批失败只丢本批（下轮重聚类），其余照常应用。no-merge 记忆上限 4000 → 16000 适配宽边界。
 - **避雷项进 prompt 不再截断**：discovery / 推荐两侧的 `disliked_topics` 画像输入上限 64 → 128，与存储上限（`_DISLIKED_TOPICS_STORE_CAP=128`）对齐——近因并集修复（v0.3.121）之前的存量条目仍按字典序排列，64 截断等于"按拼音首字母决定哪些雷点对 LLM 可见"，95 个存量避雷项有 31 个从未进过 prompt。
 - **近期觉察 / 洞察截断取最新而非最旧**：`recent_awareness` / `active_insights` 窗口按时间旧→新存储（cognition_cycle 取尾部），但全部 8 处消费端用 `[:5]` 切片——进 discovery / 推荐 / delight prompt、画像 markdown 镜像和 portrait 重生成的一直是**最旧** 5 条（字段名叫 recent，实际喂的是 least recent）。统一改为 `[-5:]` 取最新。
 - **自动更新守卫补强**：git 命令执行从线程池 `subprocess.run` 改为 `asyncio.create_subprocess_exec`，避免 Windows 后端长时间运行后命令异常返回；自动应用前改跑 `git fetch --force --tags origin`，解决本地旧 tag 遇到远端重打时的 `would clobber existing tag`；dirty worktree guard 继续阻止已跟踪文件的工作区改动，但不再被 `uv.lock`、未跟踪文件、纯 index-only 条目和本地 `ollama-models/` 阻塞；GitHub tag 查询遇到证书校验类错误时降级重试一次，兜底 Windows 打包环境证书链缺失。
+
+## v0.3.121: 12 小时画像自动整理（2026-06-12）
+
+画像从「只进不出地积累」变成「定期自我整理」：新增 ProfileConsolidator，每 12 小时按「规则合并 → embedding 聚类 → LLM 裁决 → 校验执行」流水线清理兴趣 / 避雷主题的措辞变体，应用前自动备份、可一键回滚；配套把画像有效上限提升到 64、画像输出去掉 UP 主维度并修复偏好合并 bug。后端源码更新走 `backend-v0.3.121`；浏览器插件与桌面安装包未改动（插件仍为 `0.3.78`）。
+
 - **discovery / 评估画像输入上限放宽**：画像摘要扁平兴趣 tag 上限 10 → 30，兴趣域 / 兴趣 tag 一律按 weight 降序排序后再截断（域 tag 优先填充，画像越丰富的用户不再被列表顺序随机砍掉强兴趣）；`disliked_topics` 上限 discovery 侧 8 → 16、推荐侧 5 → 16；负例锚定 `negative_exemplars.MAX_LIMIT` 8 → 16；batch 评估 payload 的 `description` 截断 200 → 400 字符；`_select_relevant_interests()` embedding 候选池改为按 weight 排序取前 15。
 - **画像输出去掉 UP 主维度 + 偏好合并 bug 修复 + 避雷项近因排序**（接上一条的后续）：
   - `build_profile_summary()` 不再输出 `favorite_up_users`，`build_search_queries_prompt` 同步删掉配套规则——避免模型从「常看某 UP」反推内容兴趣。用户的 UP 主清单仍在 `/api/profile-summary` 用户视图可见可编辑，并继续给 `RelatedChainStrategy` 当种子，只是不进 LLM 画像输出。

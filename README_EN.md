@@ -188,11 +188,12 @@ After starting the backend, open `http://127.0.0.1:8420/web` (or just `http://12
 
 ## Recent Updates
 
-Latest: **v0.3.121: 12-hour profile auto-consolidation (2026-06-12)**. Full changelog: [docs/changelog.md](docs/changelog.md).
+Latest: **v0.3.122: profile prompt truncation fixes + auto-update guards landed (2026-06-13)**. Full changelog: [docs/changelog.md](docs/changelog.md).
 
-- **Your profile now tidies itself** — every 12 hours, synonymous phrasing variants in interests / avoid-topics ("mobile games" vs "mobile gaming") are merged through a rules + embedding clustering + LLM adjudication pipeline, with automatic pre-apply backup, one-command revert, and a cognition card showing the result.
-- **Profile capacity doubled to 64** — the interest / avoid-topic caps feeding discovery and recommendation prompts grow from 30/16 to 64, truncated by weight so strong interests no longer get crowded out by list order.
-- **Preference learning is more accurate** — fixed a bug where a single batch could wipe the accumulated favorite-uploader list; the uploader dimension no longer feeds the LLM profile (no more inferring content interests from "watches this uploader a lot"); avoid-topics are now recency-ordered.
+- **Consolidation now covers the whole store** — the 12-hour tidy-up widens from the top-128 interests to top-512, so phrasing variants across a 1000+ tag store actually get merged, with LLM adjudication running in stable batches.
+- **Avoid-topics are never truncated** — the dislike cap feeding discovery / recommendation prompts grows 64 → 128 to match storage, so every topic you flagged takes effect.
+- **Freshest awareness wins** — fixed a slicing bug that fed the *oldest* 5 awareness notes / insights into prompts; recommendations now reflect your recent state.
+- **Auto-update guards actually landed** — the Windows hang fix, re-tagged-tag recovery, and TLS fallback advertised in v0.3.121 take effect from this version.
 
 ## Community
 
@@ -652,7 +653,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.121: 12-hour profile auto-consolidation (2026-06-12)**. The recent updates section keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages and desktop installers live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags.
+Latest: **v0.3.122: profile prompt truncation fixes + auto-update guards landed (2026-06-13)**. The recent updates section keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages and desktop installers live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags.
 
 ## 🗺️ Roadmap
 
