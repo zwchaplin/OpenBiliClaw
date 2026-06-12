@@ -131,13 +131,13 @@ def render_preference_summary(preference_summary: dict[str, object]) -> str:
     return json.dumps(preference_summary, ensure_ascii=False, indent=2)
 
 
-def build_preference_analysis_prompt(
-    *,
-    events: list[dict[str, object]],
-    existing_preference: dict[str, object],
-) -> list[dict[str, str]]:
-    """Build a structured prompt for extracting user preferences from events."""
-    system_prompt = """
+def _category_vocab_line() -> str:
+    from openbiliclaw.soul.taxonomy import CATEGORY_VOCAB
+
+    return "、".join(CATEGORY_VOCAB)
+
+
+_PREFERENCE_ANALYSIS_SYSTEM_PROMPT = """
 <task>
 你要从一批用户行为事件中提取稳定偏好画像。
 </task>
@@ -147,7 +147,9 @@ def build_preference_analysis_prompt(
 2. 输出必须是严格 JSON，不要附带解释。
 3. 如果证据不足，返回空数组、默认值或较低权重。
 4. 兴趣标签控制在 5~25 个以内，weight 在 0~1 之间。证据充分时可多提，证据不足时宁可少提、给低权重，不要为了凑数编造标签。
-5. 所有文本字段（name、category、context 下的 patterns/session_type、disliked_topics）必须用中文。
+5. 所有文本字段（name、context 下的 patterns/session_type、disliked_topics）必须用中文。
+   category 必须从以下固定词表中逐字选择，不得发明新分类、不得使用同义变体：
+   __CATEGORY_VOCAB__。拿不准归属时用「其他」。
 6. favorite_up_users 必须从事件的 up_name 字段原样复制，一个字都不能改。先逐条扫描所有事件收集 up_name 值，再与 existing_preference.favorite_up_users 合并去重。严禁根据话题推测可能的UP主名称。如果本批事件中无 up_name 字段，保留 existing_preference 中的原有列表不变。
 7. cognitive_style 描述用户的信息处理偏好（如思维方式、阅读习惯、理解路径），3~5 条，基于观看行为模式推断，不要照搬兴趣标签。
 8. 每条事件都自带一个 `context` 字段（v0.3.22+ 起所有源都统一填充），它是该事件的中文自然语言摘要（如"在 B 站收藏了《讲透历史叙事》,作者:历史实验室"或"小红书点赞:手冲咖啡入门 作者:豆子老师"）。**优先把 context 作为人类可读的事件描述**来理解用户行为；同时用 metadata 里的结构化字段（up_name、bvid、folder、source_platform 等）做精确匹配 / 复制。
@@ -182,7 +184,16 @@ def build_preference_analysis_prompt(
 输入事件里如果多次出现长视频、纪录片、深度讲解，
 可以提高 “历史/纪录片/知识” 相关标签和 depth_preference。
 </examples>
-""".strip()
+""".strip().replace("__CATEGORY_VOCAB__", _category_vocab_line())
+
+
+def build_preference_analysis_prompt(
+    *,
+    events: list[dict[str, object]],
+    existing_preference: dict[str, object],
+) -> list[dict[str, str]]:
+    """Build a structured prompt for extracting user preferences from events."""
+    system_prompt = _PREFERENCE_ANALYSIS_SYSTEM_PROMPT
     user_prompt = "\n\n".join(
         [
             "<existing_preference>",
@@ -1907,6 +1918,22 @@ _CATEGORY_MAPPING_SYSTEM_PROMPT = (
 )
 
 
+def _category_tag_count(category: dict[str, object]) -> int:
+    raw = category.get("tag_count", 0)
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return 0
+    return 0
+
+
 def build_category_mapping_prompt(
     *,
     categories: list[dict[str, object]],
@@ -1918,7 +1945,7 @@ def build_category_mapping_prompt(
         "categories": sorted(
             categories,
             key=lambda c: (
-                -int(c.get("tag_count", 0) or 0),
+                -_category_tag_count(c),
                 str(c.get("category", "")),
             ),
         ),

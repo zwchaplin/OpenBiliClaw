@@ -607,6 +607,11 @@ def _builder_test_inputs() -> list[tuple[str, dict, dict]]:
             ),
         ),
         (
+            "build_preference_analysis_prompt",
+            dict(events=[{"event_type": "view", "title": "A"}], existing_preference={"a": 1}),
+            dict(events=[{"event_type": "like", "title": "B"}], existing_preference={"a": 2}),
+        ),
+        (
             "build_category_mapping_prompt",
             dict(categories=[{"category": "泛娱乐", "tag_count": 12}]),
             dict(
@@ -671,6 +676,17 @@ def test_category_mapping_prompt_user_message_carries_vocab_and_histogram() -> N
     assert '"tag_count": 12' in user
     assert '"tag_count": 12' not in system
     assert '"mapping"' in system
+
+
+def test_preference_analysis_system_prompt_contains_full_vocab() -> None:
+    from openbiliclaw.llm.prompts import build_preference_analysis_prompt
+    from openbiliclaw.soul.taxonomy import CATEGORY_VOCAB
+
+    messages = build_preference_analysis_prompt(events=[], existing_preference={})
+    system = messages[0]["content"]
+
+    assert all(term in system for term in CATEGORY_VOCAB)
+    assert "category 必须" in system
 
 
 # ----------------------------------------------------------------------
