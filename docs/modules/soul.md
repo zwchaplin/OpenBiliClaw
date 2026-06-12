@@ -39,7 +39,7 @@
 | SoulEngine.get_raw_profile() / get_overrides() | ✅ | 返回不叠加覆盖的纯 AI 画像 / 当前 `ProfileOverrides`，供编辑态与 AI 漂移比对 |
 | 用户画像覆盖层 (`soul/overrides.py`) | ✅ | `ProfileOverrides` + 纯函数 `apply_overrides`（文本/标量固定、列表增删、兴趣树增删/权重）+ 带校验的 `apply_edit` 归约器 + `build_edit_state`；用户手动编辑存独立 `profile_overrides.json`，读时叠加到 AI 画像之上，画像重建不覆盖；列表 remove 持续抑制 AI 再次推断出的同项 |
 | 分类词表 + 一次性迁移 | ✅ | `soul/taxonomy.py` 定义 19 项固定一级分类词表 `CATEGORY_VOCAB`（含「其他」，代码常量非 config），`resolve_category()` 按精确命中 → embedding 最近邻（≥0.55）→「其他」解析；`CategoryMigrator` 用一次 LLM 映射把存量自由分类迁移到词表，代码校验完整覆盖且目标必须在词表内，失败零写入；应用前写 `consolidation_runs/<run_id>.json`（`kind=category_migration`）并追加 `soul_changelog.md`，复用 `profile-consolidate --revert` 回滚 |
-| ProfileConsolidator（12h 画像整理） | ✅ | LLM 整理合并重复的喜欢 / 讨厌主题：规则层同名合并（零成本）→ embedding 聚类（≥0.85，无 embedding 退子串聚类）→ no-merge 记忆过滤已判簇 → 单次 batch LLM 输出 merge/keep 操作 → 代码校验执行（members 逐字存在、簇内全覆盖、canonical 禁裸大词、避雷严禁向上泛化）。卡 64 边界整理（likes 取权重 top-128），改 flat preference 后经 `populate_from_flat_preference` 重建 Onion 树；rename map 穿透 `profile_overrides.json`；应用即备份 `consolidation_runs/<run_id>.json` + 追加 `soul_changelog.md`；`revert(run_id)` 整体回滚并把被回滚合并对记入 no-merge。由 pipeline tick 调度（默认 12h，`[scheduler].profile_consolidation_*`），应用后发 `profile_consolidation` 认知更新卡片 |
+| ProfileConsolidator（12h 画像整理） | ✅ | LLM 整理合并重复的喜欢 / 讨厌主题：规则层同名同类合并（零成本）；同名异类不再规则合并，而是构造强制嫌疑簇送 LLM 裁决（同名异义防护，no-merge 记忆用 `name::category` 限定键）→ embedding 聚类（≥0.85，无 embedding 退子串聚类）→ no-merge 记忆过滤已判簇 → ≤30 簇/批 LLM 输出 merge/keep 操作（单批失败隔离，成功批次汇入同一个 run）→ 代码校验执行（members 逐字存在、簇内全覆盖、canonical 禁裸大词、避雷严禁向上泛化）。默认卡 64 边界整理（likes 取权重 top-128），`profile-consolidate --full` 可把 likes 边界开到全量标签库；likes judge payload 带 `category`，system prompt 含同名异义 keep 规则。改 flat preference 后经 `populate_from_flat_preference` 重建 Onion 树；rename map 穿透 `profile_overrides.json`；应用即备份 `consolidation_runs/<run_id>.json` + 追加 `soul_changelog.md`；`revert(run_id)` 整体回滚并把被回滚合并对记入 no-merge。由 pipeline tick 调度（默认 12h，`[scheduler].profile_consolidation_*`），应用后发 `profile_consolidation` 认知更新卡片 |
 | SoulEngine.get_effective_disliked_topics() | ✅ | base（raw soul.interest.dislikes ∪ raw preference.disliked_topics）再套覆盖层 remove/add（remove 最后生效），供 delight 硬过滤，用户移除项不被 raw 反向打穿 |
 | SoulEngine.apply_user_edit() | ✅ | 折叠一次确定性编辑：存覆盖层 → 同步正向/避雷两套 speculator → 记 `source=manual` cognition → 重渲染有效画像镜像并通知两端 → 新增 dislike 按编辑前后差集把 `purge_pool_for_new_dislikes` 清池**调度为 `asyncio` 后台 detached 任务**（embedding 召回 + LLM 分类耗时数十秒，绝不能阻塞编辑响应，否则前端看着像「加了没保存」；`_schedule_dislike_purge` 派发，`wait_for_pending_edits()` 供测试 / 优雅关闭等待） |
 | AwarenessAnalyzer | ✅ | 近期事件 → `AwarenessNote` 列表，支持同日去重；解析 LLM 响应时复用 `llm.json_utils.extract_llm_json_list()`，兼容 `results/items/notes/data/observations/recent_observations/latest/latest_observations` 等 object-wrapped array、reasoning 模型 bare singular-note dict、wrapper-key 下单 note、fenced JSON、JSONL 和 MiMo malformed `{ [ ... ] }`；prompt 按画像 → 偏好 → 近期事件排序以保留缓存前缀，并把近期 `dislike` / `thumbs_down` / negative 事件视为“最近开始避开 X”的保守观察信号 |
@@ -831,6 +831,19 @@ applied = await migrator.run(dry_run=False)
 ```
 
 迁移校验是强约束：现存非空分类必须被映射恰好一次，目标必须逐字来自 `CATEGORY_VOCAB`；任一失败时不写 `preference.json`，也不产生 run 记录。已有词表内分类由代码强制恒等映射，避免 LLM 把干净分类改脏。
+
+### 分类迁移与全量清理运维顺序
+
+推荐顺序：
+
+```bash
+openbiliclaw profile-consolidate --migrate-categories
+openbiliclaw profile-consolidate --migrate-categories --apply
+openbiliclaw profile-consolidate --full
+openbiliclaw profile-consolidate --full --apply
+```
+
+先做一级分类迁移，再做 `--full` 二级全量清理。迁移后，同名同类的精确重复会被阶段 0 规则层免费消化，能显著减少后续送 LLM 裁决的簇数；同名异类则保留为强制嫌疑簇，由带 `category` 的 judge payload 判断是同名异义（keep）还是误标（merge）。完成一次全量清理后，稳态交给 12h 定时任务：默认只看 likes top-128，配合输入 digest 与 no-merge 记忆，稳定画像不产生 LLM 调用。
 
 ### OnionProfile（五层洋葱模型）
 
