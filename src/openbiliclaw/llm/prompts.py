@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from openbiliclaw.llm.json_utils import parse_llm_json_tolerant
+
 if TYPE_CHECKING:
     from openbiliclaw.soul.tone import ToneProfile
 
@@ -1878,3 +1880,150 @@ def build_profile_consolidation_prompt(
         {"role": "system", "content": _PROFILE_CONSOLIDATION_SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
+
+
+# Module-level constant: 100% static system prompt for the MERGED, multi-
+# platform search-keyword generator (Discover backpressure refactor P1.4).
+# This single call subsumes the five per-platform keyword builders (B站
+# search / 小红书 / 抖音 / YouTube / X) so the profile is sent ONCE and the
+# provider-side prompt cache fires on the byte-identical prefix. Per
+# CLAUDE.md "LLM Prompt-Cache Convention": NOTHING per-call lives here —
+# the profile, the due-platform set, each platform's need count, recent
+# keywords, and avoid_* hints ALL live in the user message (<profile_summary>
+# + <platforms>). The supply-advantage hints below are kept deliberately
+# MINIMAL (one native-flavor line per platform); the rich supply table is
+# P2's job, not this builder's.
+_MERGED_KEYWORDS_SYSTEM_PROMPT = (
+    "<task>\n"
+    "你要为多个平台的内容发现一次性生成搜索关键词。\n"
+    "见 user 消息里的 <profile_summary>(用户画像,只发一次)和 <platforms>"
+    "(本轮需要补词的平台数组)。<platforms> 里每个平台块给出 platform、need"
+    "(要生成多少个该平台关键词)、recent_keywords(最近已经搜过、不要再出的词)、"
+    "avoid_topics / avoid_styles / avoid_franchises(当前推荐池已饱和、要避开的方向)。\n"
+    "</task>\n\n"
+    "<rules>\n"
+    "1. 输出必须是严格 JSON 对象,不要附带解释。\n"
+    "2. JSON 的 key 必须是 <platforms> 里出现的 platform 标识符"
+    "(bilibili / xiaohongshu / douyin / youtube / twitter),每个 key 的值是一个"
+    "字符串数组。**只输出本轮 <platforms> 里给到的平台**,不要凭空加平台。\n"
+    "3. 每个平台生成恰好该平台 need 个搜索关键词;凑不满时宁缺毋滥,数组可短于 need,"
+    "但不要为了凑数编造与画像无关的词。\n"
+    "4. 每个关键词都要是适合在该平台搜索框直接输入的短词 / 短组合,不要写成长句。\n"
+    "5. **不要重复**该平台 recent_keywords 里已有的词(换皮、加无意义尾词也算重复)。\n"
+    "6. 避开该平台的 avoid_topics / avoid_styles / avoid_franchises;这些是软避让信号,"
+    "不要为了避让而生成与用户画像无关的词。\n"
+    "7. 保持每个平台的原生搜索风格,把同一个兴趣映射到该平台最擅长的形态:\n"
+    "   - bilibili:学习向 + 梗文化,兴趣主题 + 风格词(盘点 / 入门 / 测评 / 整活)。\n"
+    "   - xiaohongshu:生活化、具象、带场景,偏美妆 / 生活 / 体验长尾"
+    "(教程 / 攻略 / vlog / 踩坑 / 真实体验),避免裸类目词。\n"
+    "   - douyin:娱乐 + 热点,短平快、口语、跟得上当下热度的词。\n"
+    "   - youtube:英文长内容为主,2-4 词,中英文按话题选最常见的搜索语言。\n"
+    "   - twitter:实时 / 英文讨论为主,1-4 词,技术 / 小众话题尤其优先英文,"
+    "华语圈话题可用中文。\n"
+    "8. 同一平台内各关键词的核心主题词要两两不同,不要同一概念换皮出现多次。\n"
+    "</rules>\n\n"
+    "<output_schema>\n"
+    "{\n"
+    '  "bilibili": ["历史 冷知识 盘点", "摄影 入门 推荐"],\n'
+    '  "xiaohongshu": ["手冲咖啡 入门 教程", "通勤 穿搭 真实体验"],\n'
+    '  "douyin": ["AI 绘画 整活", "城市 夜骑 热门"],\n'
+    '  "youtube": ["machine learning explained", "城市规划 纪录片"],\n'
+    '  "twitter": ["rust async runtime", "llm agents discussion"]\n'
+    "}\n"
+    "</output_schema>"
+)
+
+
+def build_merged_keywords_prompt(
+    *,
+    profile_summary: dict[str, object],
+    platform_blocks: list[dict[str, object]],
+) -> list[dict[str, str]]:
+    """Build the merged, multi-platform search-keyword generation prompt.
+
+    Subsumes the five legacy per-platform keyword builders into ONE LLM call
+    (Discover backpressure refactor, design spec §7.1 / §7.2): the profile is
+    serialized once and every due platform rides along in a single ``<platforms>``
+    block, so the provider prompt cache fires on the stable prefix.
+
+    Args:
+        profile_summary: The canonical ``build_profile_summary`` dict, sent once.
+        platform_blocks: One dict per due platform, each carrying
+            ``platform`` plus ``need`` / ``recent_keywords`` /
+            ``avoid_topics`` / ``avoid_styles`` / ``avoid_franchises``. Only the
+            platforms passed in appear in the prompt (and may appear in the
+            output). The ``avoid_*`` fields come from
+            ``PoolDistributionSnapshot.to_prompt_hints()`` (global, ``prefer_axes``
+            intentionally disabled).
+
+    Cache-friendly per CLAUDE.md: ``system_prompt`` is the module-level constant
+    ``_MERGED_KEYWORDS_SYSTEM_PROMPT`` (100% static). All per-call data lives in
+    ``user_prompt``, ordered most-stable (profile) → most-variable (this batch's
+    due platforms), each serialized with ``ensure_ascii=False, indent=2,
+    sort_keys=True``.
+    """
+    user_prompt = "\n\n".join(
+        [
+            "<profile_summary>",
+            json.dumps(profile_summary, ensure_ascii=False, indent=2, sort_keys=True),
+            "</profile_summary>",
+            "<platforms>",
+            json.dumps(platform_blocks, ensure_ascii=False, indent=2, sort_keys=True),
+            "</platforms>",
+        ]
+    )
+    return [
+        {"role": "system", "content": _MERGED_KEYWORDS_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def parse_merged_keywords(
+    content: str,
+    platforms: list[str],
+    *,
+    per_platform_cap: int,
+) -> dict[str, list[str]]:
+    """Parse the merged keyword-generation response into per-platform lists.
+
+    Tolerant counterpart to :func:`build_merged_keywords_prompt`. Reuses
+    ``parse_llm_json_tolerant`` so truncated / fenced JSON still salvages.
+    Never raises — a missing, non-list, or garbage value for any requested
+    platform yields an empty list for that platform.
+
+    Args:
+        content: The raw LLM response text.
+        platforms: The platforms to extract (typically the same set passed to
+            the builder). The returned dict has exactly these keys.
+        per_platform_cap: Maximum keywords kept per platform after dedup.
+
+    Returns:
+        ``{platform: [keyword, ...]}`` for every platform in ``platforms``,
+        each list deduped (order-preserving) and capped at ``per_platform_cap``.
+    """
+    result: dict[str, list[str]] = {platform: [] for platform in platforms}
+    if per_platform_cap <= 0:
+        return result
+
+    payload = parse_llm_json_tolerant(content)
+    if not isinstance(payload, dict):
+        return result
+
+    for platform in platforms:
+        raw = payload.get(platform)
+        if not isinstance(raw, list):
+            continue
+        seen: set[str] = set()
+        keywords: list[str] = []
+        for item in raw:
+            if not isinstance(item, (str, int, float)):
+                continue
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            keywords.append(text)
+            if len(keywords) >= per_platform_cap:
+                break
+        result[platform] = keywords
+    return result
