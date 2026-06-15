@@ -62,6 +62,8 @@ from openbiliclaw.api.models import (
     InitPrerequisitesOut,
     InitStageOut,
     InitStatusOut,
+    InsightFeedbackIn,
+    InsightFeedbackResponse,
     LLMConfigOut,
     LLMProviderConfigOut,
     LoggingConfigOut,
@@ -4856,6 +4858,37 @@ def create_app(
             ok=True,
             bvid=bvid,
             layers_updated=layers_updated,
+        )
+
+    @app.post("/api/insights/feedback", response_model=InsightFeedbackResponse)
+    async def insight_feedback(payload: InsightFeedbackIn) -> InsightFeedbackResponse:
+        """Calibrate an insight hypothesis from a user confirm/reject.
+
+        The popup's insight cards surface ``active_insights`` (hypothesis +
+        confidence). This endpoint routes a confirm/reject back into
+        ``SoulEngine.update_from_feedback`` so the hypothesis is validated and
+        re-weighted (confirm → confidence ≥0.75; reject → ≤0.35), closing the
+        loop that was previously implemented but unwired.
+        """
+        signal = payload.signal.strip().lower()
+        if signal not in {"confirm", "like", "support", "reject", "dislike", "deny"}:
+            raise HTTPException(status_code=422, detail="Unsupported insight feedback signal.")
+        hypothesis = payload.hypothesis.strip()
+        if not hypothesis:
+            raise HTTPException(status_code=422, detail="hypothesis is required.")
+        if ctx.soul_engine is None:
+            raise HTTPException(status_code=503, detail="Soul engine not ready.")
+
+        result = await ctx.soul_engine.update_from_feedback(
+            {"hypothesis": hypothesis, "signal": signal}
+        )
+        return InsightFeedbackResponse(
+            ok=True,
+            matched=bool(result.get("matched", False)),
+            hypothesis=str(result.get("hypothesis", hypothesis)),
+            signal=str(result.get("signal", signal)),
+            validated=bool(result.get("validated", False)),
+            confidence=float(result.get("confidence", 0.0)),
         )
 
     # ── Source recipe management endpoints ──────────────────────────

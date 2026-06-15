@@ -878,12 +878,18 @@ class Database:
         keyword: str = "",
         limit: int = 100,
         satisfaction_modes: frozenset[str] | None = None,
+        after_event_id: int | None = None,
     ) -> list[dict[str, Any]]:
         """Query events with optional filters.
 
         ``satisfaction_modes`` filters by ``inferred_satisfaction``. When
         the set includes ``"unknown"``, rows with a NULL classification
         (pre-migration legacy rows) are also returned.
+
+        ``after_event_id`` restricts to rows with ``id`` strictly greater
+        than the given watermark — used by the cognition cycle to read only
+        events not yet folded into awareness. Result order is unchanged
+        (newest-first); callers that need chronological order reverse it.
         """
         sql = "SELECT * FROM events"
         clauses: list[str] = []
@@ -893,6 +899,10 @@ class Database:
             placeholders = ", ".join("?" for _ in event_types)
             clauses.append(f"event_type IN ({placeholders})")
             params.extend(event_types)
+
+        if after_event_id is not None:
+            clauses.append("id > ?")
+            params.append(after_event_id)
 
         if start_time is not None:
             clauses.append("created_at >= ?")

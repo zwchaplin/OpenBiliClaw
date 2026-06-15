@@ -607,8 +607,16 @@ def build_insight_prompt(
     awareness_notes: list[dict[str, object]],
     preference_summary: dict[str, object],
     soul_profile: dict[str, object],
+    existing_hypotheses: list[dict[str, object]] | None = None,
 ) -> list[dict[str, str]]:
-    """Build a structured prompt for insight-hypothesis generation."""
+    """Build a structured prompt for insight-hypothesis generation.
+
+    ``existing_hypotheses`` (optional) is the set of currently-active
+    hypotheses passed as read-only context so an incremental run — which
+    only sees *new* awareness notes — can refine or avoid restating them
+    instead of regenerating from the full awareness history every time.
+    See rules 5 / 6 below.
+    """
     system_prompt = """
 <task>
 你要基于近期觉察、偏好摘要和用户画像，生成谨慎的解释性假设。
@@ -619,6 +627,8 @@ def build_insight_prompt(
 2. hypothesis 是假设，不是结论，措辞必须保守。
 3. 每条必须附 1~3 条 evidence。
 4. confidence 保持在 0~1，且不要过高。
+5. existing_hypotheses（如有）是当前已有的活跃假设，仅作上下文参考。本次新的觉察笔记若印证某条已有假设，可重述同一 hypothesis 文本以累积其证据/置信；若指向新方向，再生成新假设。不要为凑数而重复已有假设。
+6. 只依据本次觉察笔记里的新信号下结论；existing_hypotheses 本身不是新证据。
 </rules>
 
 <output_schema>
@@ -636,6 +646,9 @@ def build_insight_prompt(
             "<awareness_notes>",
             json.dumps(awareness_notes, ensure_ascii=False, indent=2),
             "</awareness_notes>",
+            "<existing_hypotheses>",
+            json.dumps(existing_hypotheses or [], ensure_ascii=False, indent=2),
+            "</existing_hypotheses>",
             "<preference_summary>",
             json.dumps(preference_summary, ensure_ascii=False, indent=2),
             "</preference_summary>",
