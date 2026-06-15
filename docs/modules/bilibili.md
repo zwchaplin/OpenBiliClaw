@@ -138,6 +138,14 @@ queue.merge_result(task_id, videos=[{"bvid": "BV...", "title": "..."}], complete
 - `content/bili/task-executor.ts`：不直连 B 站 API，不生成 WBI 签名，只读取真实页面已渲染的 `.bili-video-card` / `.video-list-item` 等结果卡片，提取 `bvid/title/up_name/url/cover_url/view_count/duration/description`。
 - `service-worker.ts`：监听 runtime stream 的 `bili_task_available` 事件做即时 poll，接收 `BILI_TASK_RESULT` 并回传后端；普通 alarm 作为兜底。
 
+真实端到端验证：
+
+```bash
+BILI_EXTENSION_E2E=1 .venv/bin/pytest tests/test_bili_extension_browser_e2e.py -q -s
+```
+
+该 harness 使用临时后端和临时 SQLite，不污染生产数据；它等待真实扩展 runtime-stream presence，强制进程内 B 站 search cooldown，再由真实 `BilibiliExtensionSearchProducer` 入队，最后要求扩展打开真实 `search.bilibili.com` 页面并完成 DOM 结果回传。
+
 ### 数据结构
 
 | 类 | 用途 |

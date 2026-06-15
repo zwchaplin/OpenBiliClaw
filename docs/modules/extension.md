@@ -174,7 +174,10 @@ extension/
 
 dispatcher 导航到 `https://search.bilibili.com/all?keyword=...`，等 tab ready 后发送 `BILI_TASK_EXECUTE`。`src/content/bili/task-executor.ts` 不在 isolated world 里直连 B 站 API，也不伪造 WBI 签名；它只等待真实搜索页渲染出 `.bili-video-card` / `.video-list-item`，从 DOM 卡片里提取 `bvid`、标题、UP 主、播放数、封面、时长和简介，再用 `BILI_TASK_RESULT` 回给 service worker。service worker POST 到 `/api/sources/bili/task-result` 后，后端把结果写入 `discovery_candidates`，继续走共享 evaluator / admission，而不是由插件直接写推荐池。
 
-真实联调可用一条手工任务验证：后端重启到包含该分支的代码，加载 `extension/dist/`，让 `/api/sources/bili/next-task` 返回 search task；扩展应打开后台 B 站搜索页，最终 task 状态变为 `completed`，对应候选带 `source_strategy="bili-extension-search"`。
+真实联调可用两档验证：
+
+- 手工任务：后端重启到包含该分支的代码，加载 `extension/dist/`，让 `/api/sources/bili/next-task` 返回 search task；扩展应打开后台 B 站搜索页，最终 task 状态变为 `completed`，对应候选带 `source_strategy="bili-extension-search"`。
+- 自动触发 E2E：`BILI_EXTENSION_E2E=1 .venv/bin/pytest tests/test_bili_extension_browser_e2e.py -q -s`。该测试启动临时 FastAPI app + 临时 SQLite，使用 Playwright 持久上下文加载 unpacked extension，等待真实 runtime-stream presence，把进程内 `BilibiliAPIClient` 置入 search cooldown，再调用真实 `BilibiliExtensionSearchProducer` 入队；扩展必须领取任务、打开真实 B 站搜索页并回传 DOM 结果。测试不使用生产数据库，也不需要生产 debug endpoint。
 
 ### 小红书任务桥
 
@@ -389,6 +392,7 @@ npm run build
 - 页面识别 / BV 提取 / 动作识别
 - 缓冲去重与强信号 flush
 - B 站搜索兜底 dispatcher / DOM executor helper（URL、任务校验、BV 提取、播放量归一化、结果卡去重）
+- B 站搜索兜底 opt-in 浏览器 E2E harness（默认 skip，`BILI_EXTENSION_E2E=1` 才启动真实 Chromium）
 - B 站 / 抖音 Cookie 自动同步的重试闹钟和幂等监听器
 - manifest 图标资源存在性
 - Firefox manifest 的 version 注入、`sidebar_action` 降级路径、AMO 数据收集类别声明和 Firefox zip 打包清理
